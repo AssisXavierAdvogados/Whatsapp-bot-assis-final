@@ -12,7 +12,12 @@ app.use(express.urlencoded({ extended: true }));
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_PHONE = process.env.TWILIO_PHONE || 'whatsapp:+14155238886';
+
+// CORREÇÃO 1: Número fixo com prefixo whatsapp: garantido.
+// Antes: process.env.TWILIO_PHONE || '...' — se a variável existisse sem o prefixo,
+// a API do Twilio rejeitava o From e causava o erro 21604 no To.
+const TWILIO_PHONE = 'whatsapp:+14155238886';
+
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 
@@ -100,25 +105,41 @@ async function callClaudeAPI(userMessage, userId) {
 }
 
 async function sendWhatsAppMessage(to, message) {
+  // CORREÇÃO 2: Validação explícita do destinatário antes de chamar a API.
+  if (!to) {
+    console.error('sendWhatsAppMessage: parâmetro "to" está vazio ou indefinido.');
+    return;
+  }
+
+  // CORREÇÃO 3: A API do Twilio exige application/x-www-form-urlencoded, não JSON.
+  // Antes: axios enviava JSON por padrão → Twilio ignorava os campos → erro 21604 ("To is required").
+  // Agora: URLSearchParams serializa os dados no formato correto.
+  const params = new URLSearchParams({
+    From: TWILIO_PHONE,
+    To: to,
+    Body: message
+  });
+
+  console.log(`[Twilio] Enviando mensagem | De: ${TWILIO_PHONE} | Para: ${to}`);
+
   try {
     const response = await axios.post(
       `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
-      {
-        From: TWILIO_PHONE,
-        To: to,
-        Body: message
-      },
+      params.toString(),
       {
         auth: {
           username: TWILIO_ACCOUNT_SID,
           password: TWILIO_AUTH_TOKEN
+        },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
         }
       }
     );
-    console.log('Mensagem enviada:', response.data.sid);
+    console.log(`[Twilio] Mensagem enviada com sucesso. SID: ${response.data.sid}`);
     return response.data;
   } catch (error) {
-    console.error('Erro ao enviar mensagem:', error.response?.data || error.message);
+    console.error('[Twilio] Erro ao enviar mensagem:', error.response?.data || error.message);
   }
 }
 
@@ -126,9 +147,14 @@ app.post('/webhook/messages', async (req, res) => {
   try {
     const incomingMessage = req.body.Body;
     const senderNumber = req.body.From;
-    const userId = senderNumber.replace('whatsapp:', '');
+    const userId = senderNumber ? senderNumber.replace('whatsapp:', '') : null;
 
-    console.log(`Mensagem recebida de ${senderNumber}: ${incomingMessage}`);
+    if (!senderNumber || !incomingMessage) {
+      console.error('Webhook recebeu payload incompleto:', req.body);
+      return res.status(400).send('Payload inválido');
+    }
+
+    console.log(`[Webhook] Mensagem recebida de ${senderNumber}: ${incomingMessage}`);
 
     const response = await callClaudeAPI(incomingMessage, userId);
 
@@ -141,11 +167,43 @@ app.post('/webhook/messages', async (req, res) => {
   }
 });
 
+// Rota de diagnóstico: simula o envio sem chamar APIs reais
+app.get('/test-send', (req, res) => {
+  const simulatedTo = req.query.to || 'whatsapp:+5544999778551';
+  const simulatedMessage = req.query.msg || 'Olá! Tudo bem? Como posso ajudar?';
+
+  const params = new URLSearchParams({
+    From: TWILIO_PHONE,
+    To: simulatedTo,
+    Body: simulatedMessage
+  });
+
+  res.json({
+    status: 'simulacao',
+    descricao: 'Esta rota mostra como a requisição seria enviada ao Twilio.',
+    url: `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    corpo_codificado: params.toString(),
+    campos: {
+      From: TWILIO_PHONE,
+      To: simulatedTo,
+      Body: simulatedMessage
+    },
+    credenciais: {
+      TWILIO_ACCOUNT_SID: TWILIO_ACCOUNT_SID ? `${TWILIO_ACCOUNT_SID.slice(0, 6)}...` : 'NAO DEFINIDO',
+      TWILIO_AUTH_TOKEN: TWILIO_AUTH_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
+      CLAUDE_API_KEY: CLAUDE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO'
+    }
+  });
+});
+
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'Chatbot está funcionando!' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🤖 Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
-  console.log(`📱 WhatsApp: ${ESCRITORIO_PHONE}`);
+  console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
+  console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
+  console.log(`Twilio From: ${TWILIO_PHONE}`);
 });

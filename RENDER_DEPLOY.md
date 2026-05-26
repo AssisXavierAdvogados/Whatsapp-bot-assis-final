@@ -1,90 +1,76 @@
-# 🚀 Guia: Deploy no Render.com
+# Deploy no Render.com — Guia Rápido
 
-## Passo 1: Preparar credenciais
+## Passo 1: Acessar o Render
 
-Certifique-se que você tem:
-- ✅ CLAUDE_API_KEY (de console.anthropic.com)
-- ✅ TWILIO_ACCOUNT_SID (de console.twilio.com)
-- ✅ TWILIO_AUTH_TOKEN (de console.twilio.com)
-- ✅ Seu número de WhatsApp do Twilio Sandbox
+Abra no celular: **https://render.com** e faça login.
 
-## Passo 2: Fazer upload no Render
+## Passo 2: Criar o serviço
 
-1. Acesse https://render.com
-2. Clique em "New +" → "Web Service"
-3. Selecione "Public Git repository"
-4. Cole a URL (se tiver GitHub): https://github.com/AssisXavierAdvogados/whatsapp-bot-assis-clean
-5. OU upload manual dos arquivos
+1. Toque em **"New +"** → **"Web Service"**
+2. Conecte ao GitHub e selecione o repositório **`Whatsapp-bot-assis-final`**
+3. O Render detecta o `render.yaml` automaticamente — a maioria das configurações já estará preenchida
 
-### Se usar upload manual:
-1. Crie um repositório Git vazio localmente
-2. Faça upload dos arquivos (server.js, package.json, .env.example)
-3. Faça push para qualquer repositório Git (GitHub, GitLab, etc)
+## Passo 3: Preencher os 3 valores secretos
 
-## Passo 3: Configurar no Render
+Na tela de criação, role até **"Environment Variables"** e preencha:
 
-1. **Name:** assis-xavier-whatsapp-bot
-2. **Environment:** Node
-3. **Build Command:** npm install
-4. **Start Command:** npm start
-5. **Plan:** Free
+| Variável | Onde encontrar |
+|---|---|
+| `CLAUDE_API_KEY` | console.anthropic.com → API Keys |
+| `TWILIO_ACCOUNT_SID` | console.twilio.com → Account Info |
+| `TWILIO_AUTH_TOKEN` | console.twilio.com → Account Info |
 
-## Passo 4: Adicionar variáveis de ambiente
+## Passo 4: Fazer o deploy
 
-No Render dashboard, vá em "Environment":
+Toque em **"Create Web Service"**. Aguarde ~2 minutos.
+
+## Passo 5: Testar
+
+Pegue a URL gerada (ex: `https://assis-xavier-whatsapp-bot.onrender.com`) e acesse:
 
 ```
-CLAUDE_API_KEY=sk-ant-...
-TWILIO_ACCOUNT_SID=AC0d9b1b...
-TWILIO_AUTH_TOKEN=SK9f726e0e...
-TWILIO_PHONE=whatsapp:+14155238886
-ESCRITORIO_PHONE=+55 (44)99977-8551
-PORT=3000
-NODE_ENV=production
+https://SEU-APP.onrender.com/health
 ```
 
-## Passo 5: Configurar Webhook no Twilio
+Deve retornar: `{"status":"OK","message":"Chatbot está funcionando!"}`
 
-1. Acesse https://console.twilio.com
-2. Vá em "Messaging" → "Services" → Seu serviço
-3. Em "Inbound Settings", coloque a URL:
+## Passo 6: Configurar o Webhook no Twilio
+
+1. Acesse **console.twilio.com**
+2. Vá em **Messaging → Try it out → Send a WhatsApp message**
+3. Em **"When a message comes in"**, cole:
 
 ```
-https://seu-app.onrender.com/webhook/messages
+https://SEU-APP.onrender.com/webhook/messages
 ```
 
-(Substitua "seu-app" pelo nome do seu serviço no Render)
+## Pronto!
 
-## Passo 6: Testar
-
-1. No Render, procure pela URL da sua aplicação
-2. Visite: https://seu-app.onrender.com/health
-3. Deve retornar: {"status":"OK","message":"Chatbot está funcionando!"}
-
-## Pronto! 🎉
-
-Seu chatbot está online 24/7!
-
-Envie uma mensagem via WhatsApp para o Twilio Sandbox e teste!
+Envie qualquer mensagem para o número do Twilio Sandbox no WhatsApp para testar.
 
 ---
 
-## Troubleshooting
+## Verificar se as credenciais estão corretas
 
-### Erro 503 Service Unavailable
-- Espere 1-2 minutos para o serviço iniciar
-- Verifique os logs no Render
+Acesse esta URL no navegador (sem chamar nenhuma API real):
 
-### Mensagens não chegam
-- Verifique se as credenciais do Twilio estão corretas
-- Confirme que o webhook está apontando para a URL correta
-- Verifique os logs de erro no Render
+```
+https://SEU-APP.onrender.com/test-send
+```
 
-### Erro de autenticação Claude
-- Confirme que a API Key está correta
-- Verifique se tem créditos disponíveis
+Se aparecer `"NAO DEFINIDO"` em alguma credencial, volte ao painel do Render e adicione a variável faltante.
 
 ---
 
-**Desenvolvido para: Assis e Xavier Advogados** ⚖️
+## Problemas comuns
+
+**Mensagem não chega / erro 21604** → Credenciais do Twilio incorretas ou webhook não configurado.
+
+**Erro 503** → Aguarde 1-2 minutos, o serviço está iniciando.
+
+**Claude não responde** → Verifique se `CLAUDE_API_KEY` está correta e com créditos disponíveis.
+
+---
+
+**Desenvolvido para: Assis e Xavier Advogados**
 **WhatsApp: +55 (44)99977-8551**
