@@ -8,17 +8,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-
-// CORREÇÃO 1: Número fixo com prefixo whatsapp: garantido.
-// Antes: process.env.TWILIO_PHONE || '...' — se a variável existisse sem o prefixo,
-// a API do Twilio rejeitava o From e causava o erro 21604 no To.
-const TWILIO_PHONE = 'whatsapp:+14155238886';
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 
 const OFFICE_CONTEXT = `
@@ -59,15 +53,7 @@ async function callClaudeAPI(userMessage, userId) {
       conversationHistory[userId] = [];
     }
 
-    conversationHistory[userId].push({
-      role: 'user',
-      content: userMessage
-    });
-
-    const messages = conversationHistory[userId].map(msg => ({
-      role: msg.role,
-      content: msg.content
-    }));
+    conversationHistory[userId].push({ role: 'user', content: userMessage });
 
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
@@ -75,7 +61,7 @@ async function callClaudeAPI(userMessage, userId) {
         model: 'claude-opus-4-1',
         max_tokens: 1024,
         system: OFFICE_CONTEXT,
-        messages: messages
+        messages: conversationHistory[userId]
       },
       {
         headers: {
@@ -88,10 +74,7 @@ async function callClaudeAPI(userMessage, userId) {
 
     const assistantMessage = response.data.content[0].text;
 
-    conversationHistory[userId].push({
-      role: 'assistant',
-      content: assistantMessage
-    });
+    conversationHistory[userId].push({ role: 'assistant', content: assistantMessage });
 
     if (conversationHistory[userId].length > 20) {
       conversationHistory[userId] = conversationHistory[userId].slice(-20);
@@ -99,111 +82,103 @@ async function callClaudeAPI(userMessage, userId) {
 
     return assistantMessage;
   } catch (error) {
-    console.error('Erro ao chamar Claude API:', error.response?.data || error.message);
-    return `Desculpe, tive um problema técnico. Por favor, entre em contato conosco via WhatsApp: ${ESCRITORIO_PHONE}`;
+    console.error('[Claude] Erro:', error.response?.data || error.message);
+    return `Desculpe, tive um problema técnico. Entre em contato via WhatsApp: ${ESCRITORIO_PHONE}`;
   }
 }
 
 async function sendWhatsAppMessage(to, message) {
-  // CORREÇÃO 2: Validação explícita do destinatário antes de chamar a API.
-  if (!to) {
-    console.error('sendWhatsAppMessage: parâmetro "to" está vazio ou indefinido.');
+  if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
+    console.error('[Meta] Parâmetros ausentes para envio:', { to, PHONE_NUMBER_ID: !!PHONE_NUMBER_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN });
     return;
   }
 
-  // CORREÇÃO 3: A API do Twilio exige application/x-www-form-urlencoded, não JSON.
-  // Antes: axios enviava JSON por padrão → Twilio ignorava os campos → erro 21604 ("To is required").
-  // Agora: URLSearchParams serializa os dados no formato correto.
-  const params = new URLSearchParams({
-    From: TWILIO_PHONE,
-    To: to,
-    Body: message
-  });
-
-  console.log(`[Twilio] Enviando mensagem | De: ${TWILIO_PHONE} | Para: ${to}`);
+  console.log(`[Meta] Enviando mensagem para: ${to}`);
 
   try {
     const response = await axios.post(
-      `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
-      params.toString(),
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
       {
-        auth: {
-          username: TWILIO_ACCOUNT_SID,
-          password: TWILIO_AUTH_TOKEN
-        },
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'text',
+        text: { body: message }
+      },
+      {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
         }
       }
     );
-    console.log(`[Twilio] Mensagem enviada com sucesso. SID: ${response.data.sid}`);
+    console.log(`[Meta] Mensagem enviada. ID: ${response.data.messages?.[0]?.id}`);
     return response.data;
   } catch (error) {
-    console.error('[Twilio] Erro ao enviar mensagem:', error.response?.data || error.message);
+    console.error('[Meta] Erro ao enviar mensagem:', error.response?.data || error.message);
   }
 }
 
-app.post('/webhook/messages', async (req, res) => {
+// Verificação do webhook exigida pela Meta
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('[Webhook] Verificação concluída com sucesso.');
+    return res.status(200).send(challenge);
+  }
+
+  console.error('[Webhook] Falha na verificação. Token recebido:', token);
+  res.sendStatus(403);
+});
+
+// Recebimento de mensagens da Meta
+app.post('/webhook', async (req, res) => {
+  // Responder 200 imediatamente — a Meta exige resposta rápida
+  res.sendStatus(200);
+
   try {
-    const incomingMessage = req.body.Body;
-    const senderNumber = req.body.From;
-    const userId = senderNumber ? senderNumber.replace('whatsapp:', '') : null;
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0]?.value;
+    const messages = change?.messages;
 
-    if (!senderNumber || !incomingMessage) {
-      console.error('Webhook recebeu payload incompleto:', req.body);
-      return res.status(400).send('Payload inválido');
-    }
+    if (!messages || messages.length === 0) return;
 
-    console.log(`[Webhook] Mensagem recebida de ${senderNumber}: ${incomingMessage}`);
+    const message = messages[0];
 
-    const response = await callClaudeAPI(incomingMessage, userId);
+    // Ignorar mensagens que não sejam texto
+    if (message.type !== 'text') return;
 
-    await sendWhatsAppMessage(senderNumber, response);
+    const senderNumber = message.from;
+    const incomingText = message.text.body;
 
-    res.status(200).send('OK');
+    console.log(`[Webhook] Mensagem de ${senderNumber}: ${incomingText}`);
+
+    const reply = await callClaudeAPI(incomingText, senderNumber);
+
+    await sendWhatsAppMessage(senderNumber, reply);
   } catch (error) {
-    console.error('Erro no webhook:', error);
-    res.status(500).send('Erro ao processar mensagem');
+    console.error('[Webhook] Erro ao processar mensagem:', error);
   }
 });
 
-// Rota de diagnóstico: simula o envio sem chamar APIs reais
-app.get('/test-send', (req, res) => {
-  const simulatedTo = req.query.to || 'whatsapp:+5544999778551';
-  const simulatedMessage = req.query.msg || 'Olá! Tudo bem? Como posso ajudar?';
-
-  const params = new URLSearchParams({
-    From: TWILIO_PHONE,
-    To: simulatedTo,
-    Body: simulatedMessage
-  });
-
-  res.json({
-    status: 'simulacao',
-    descricao: 'Esta rota mostra como a requisição seria enviada ao Twilio.',
-    url: `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    corpo_codificado: params.toString(),
-    campos: {
-      From: TWILIO_PHONE,
-      To: simulatedTo,
-      Body: simulatedMessage
-    },
-    credenciais: {
-      TWILIO_ACCOUNT_SID: TWILIO_ACCOUNT_SID ? `${TWILIO_ACCOUNT_SID.slice(0, 6)}...` : 'NAO DEFINIDO',
-      TWILIO_AUTH_TOKEN: TWILIO_AUTH_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
-      CLAUDE_API_KEY: CLAUDE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO'
+// Diagnóstico: verifica se as variáveis de ambiente estão definidas
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'OK',
+    message: 'Chatbot está funcionando!',
+    config: {
+      WHATSAPP_TOKEN: WHATSAPP_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
+      PHONE_NUMBER_ID: PHONE_NUMBER_ID ? `${PHONE_NUMBER_ID.slice(0, 6)}...` : 'NAO DEFINIDO',
+      CLAUDE_API_KEY: CLAUDE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
+      VERIFY_TOKEN: VERIFY_TOKEN
     }
   });
-});
-
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', message: 'Chatbot está funcionando!' });
 });
 
 app.listen(PORT, () => {
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
-  console.log(`Twilio From: ${TWILIO_PHONE}`);
+  console.log(`Webhook URL: /webhook`);
 });
