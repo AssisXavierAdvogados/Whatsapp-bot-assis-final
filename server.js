@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const dotenv = require('dotenv');
+const fs = require('fs');
+const path = require('path');
 
 dotenv.config();
 
@@ -8,6 +10,24 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+// Histórico persistido em arquivo — sobrevive ao sleep do Render
+const HISTORY_FILE = path.join('/tmp', 'conversation_history.json');
+
+function loadHistory() {
+  try {
+    if (fs.existsSync(HISTORY_FILE)) {
+      return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  return {};
+}
+
+function saveHistory(history) {
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history), 'utf8');
+  } catch (e) {}
+}
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
@@ -42,7 +62,14 @@ FLUXO DE ATENDIMENTO (siga essa ordem, sem pular etapas):
 4. Peça o nome do cliente
 5. Informe a área e pergunte o melhor horário para o especialista ligar
 
-IMPORTANTE: Não ultrapasse 3 perguntas no total antes de direcionar. Se a situação já estiver clara na primeira mensagem, pule direto para pedir o nome.
+IMPORTANTE — APRESENTAÇÃO:
+- Se já existe histórico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
+- Só se apresente uma única vez, na primeira mensagem da conversa.
+- Se o cliente mudar de assunto, responda normalmente sem se reapresentar.
+
+IMPORTANTE — PERGUNTAS:
+- Não ultrapasse 3 perguntas no total antes de direcionar.
+- Se a situação já estiver clara na primeira mensagem, pule direto para pedir o nome.
 
 ÁREAS E QUANDO DIRECIONAR:
 - Trabalhista: demissão, horas extras, assédio, acidente de trabalho, verbas rescisórias
@@ -57,7 +84,7 @@ QUANDO TIVER O SUFICIENTE PARA DIRECIONAR:
 Diga algo como: "Entendi sua situação. Vou passar para o nosso especialista em [área]. Qual o melhor horário para ele entrar em contato com você?"
 `;
 
-const conversationHistory = {};
+const conversationHistory = loadHistory();
 
 async function callClaudeAPI(userMessage, userId) {
   try {
@@ -91,6 +118,8 @@ async function callClaudeAPI(userMessage, userId) {
     if (conversationHistory[userId].length > 20) {
       conversationHistory[userId] = conversationHistory[userId].slice(-20);
     }
+
+    saveHistory(conversationHistory);
 
     return assistantMessage;
   } catch (error) {
