@@ -94,6 +94,37 @@ async function callClaudeAPI(userMessage, userId) {
   }
 }
 
+// Marca a mensagem como lida (aparece ✓✓ azul para o cliente)
+async function markAsRead(messageId) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+  } catch (error) {
+    console.error('[Meta] Erro ao marcar como lido:', error.response?.data);
+  }
+}
+
+// Simula tempo de digitação: mínimo 2s + proporcional ao tamanho da resposta
+function typingDelay(text) {
+  const baseDelay = 2000;
+  const charsPerSecond = 18;
+  const calculated = baseDelay + (text.length / charsPerSecond) * 1000;
+  const delay = Math.min(Math.max(calculated, 2000), 7000);
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
 async function sendWhatsAppMessage(to, message) {
   if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
     console.error('[Meta] Parâmetros ausentes para envio:', { to, PHONE_NUMBER_ID: !!PHONE_NUMBER_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN });
@@ -157,10 +188,17 @@ app.post('/webhook', async (req, res) => {
 
     const senderNumber = message.from;
     const incomingText = message.text.body;
+    const messageId = message.id;
 
     console.log(`[Webhook] Mensagem de ${senderNumber}: ${incomingText}`);
 
+    // Marca como lido imediatamente (✓✓ azul)
+    await markAsRead(messageId);
+
     const reply = await callClaudeAPI(incomingText, senderNumber);
+
+    // Aguarda tempo proporcional ao tamanho da resposta (simula digitação)
+    await typingDelay(reply);
 
     await sendWhatsAppMessage(senderNumber, reply);
   } catch (error) {
