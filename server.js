@@ -35,27 +35,15 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 
-// Especialistas do escritório — edite aqui para atualizar nomes/números
 const SPECIALISTS = {
-  trabalhista:   { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087' },
-  imobiliario:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
-  tributario:    { name: 'Dr. Willian Assis',  phone: '5544999784442' },
-  civel_bancario:{ name: 'Dr. Willian Assis',  phone: '5544999784442' },
-  empresarial:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
-  consumidor:    { name: 'Dr. Willian Assis',  phone: '5544999784442' },
-  familia:       { name: 'Dra. Aline Xavier',  phone: '5544991651532' },
-  criminal:      { name: 'Dra. Aline Xavier',  phone: '5544991651532' },
-};
-
-const SPECIALIST_NAMES = {
-  trabalhista:    'Dr. Rafael Jorge Pinhatti',
-  imobiliario:    'Dr. Willian Assis',
-  tributario:     'Dr. Willian Assis',
-  civel_bancario: 'Dr. Willian Assis',
-  empresarial:    'Dr. Willian Assis',
-  consumidor:     'Dr. Willian Assis',
-  familia:        'Dra. Aline Xavier',
-  criminal:       'Dra. Aline Xavier',
+  trabalhista:    { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087' },
+  imobiliario:    { name: 'Dr. Willian Assis',         phone: '5544999784442' },
+  tributario:     { name: 'Dr. Willian Assis',         phone: '5544999784442' },
+  civel_bancario: { name: 'Dr. Willian Assis',         phone: '5544999784442' },
+  empresarial:    { name: 'Dr. Willian Assis',         phone: '5544999784442' },
+  consumidor:     { name: 'Dr. Willian Assis',         phone: '5544999784442' },
+  familia:        { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
+  criminal:       { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
 };
 
 const OFFICE_CONTEXT = `
@@ -86,38 +74,43 @@ ESPECIALISTAS DO ESCRITÓRIO:
 FLUXO DE ATENDIMENTO (siga essa ordem):
 1. Primeira mensagem: se apresente brevemente e pergunte o que está acontecendo
 2. Com a resposta, identifique a área jurídica
-3. Peça ao cliente que faça um relato breve do que aconteceu — diga algo como: "Me conta o que aconteceu. Se puder incluir quando foi, o que ocorreu e quem estava envolvido, fica mais fácil de avaliar. Pode ir contando em partes, sem pressa."
+3. Peça ao cliente que faça um relato do que aconteceu — diga: "Me conta o que aconteceu. Se puder incluir quando foi, o que ocorreu e quem estava envolvido, fica mais fácil de avaliar. Pode ir contando em partes, sem pressa."
 4. Se necessário, faça no máximo 1 pergunta de aprofundamento
-5. Pergunte se a pessoa tem algum documento ou prova (contrato, print, foto, comprovante) que possa ajudar
-6. Se tiver: peça para enviar aqui no chat
-7. Após receber e analisar o documento: informe o resultado de forma clara e simples, sem juridiquês
+5. Pergunte se a pessoa tem algum documento ou prova que possa ajudar
+6. Se tiver: peça para enviar no chat
+7. Após analisar o documento: informe o resultado de forma simples, sem juridiquês
 8. Peça o nome do cliente
 9. Pergunte o melhor horário para o especialista ligar
-10. Com nome + horário em mãos: use a ferramenta notificar_especialista, informe o nome do especialista ao cliente e encerre com naturalidade
+10. Com nome + horário em mãos: use a ferramenta notificar_especialista, depois diga ao cliente o nome do especialista e encerre
+
+QUANDO CLIENTE DISSER QUE O ESPECIALISTA NÃO LIGOU:
+- Use imediatamente a ferramenta reenviar_lembrete
+- Seja empático: "Entendo, [nome]. Já enviei um novo aviso para o [Dr./Dra. X]. Ele vai entrar em contato com você em breve."
+- Não dê desculpas pelo especialista
 
 IMPORTANTE — APRESENTAÇÃO:
 - Se já existe histórico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
-- Só se apresente uma única vez, na primeira mensagem da conversa.
+- Se souber o nome do cliente, use-o naturalmente na conversa.
+- Só se apresente uma única vez, na primeira mensagem de uma conversa completamente nova.
 
 IMPORTANTE — ANÁLISE DE DOCUMENTOS:
-- Quando receber uma mensagem começando com "[ANÁLISE DO DOCUMENTO]", use esse resultado para informar o cliente
-- Traduza para linguagem simples e humana — sem juridiquês
-- Seja direta: informe se a pessoa tem ou não chances de êxito
-- Após informar, continue o fluxo: peça o nome e o melhor horário para ligar
+- Quando receber uma mensagem com "[ANÁLISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples
+- Foque na conclusão: a pessoa tem chances ou não tem?
+- Após informar, continue o fluxo: peça o nome e horário
 
-IMPORTANTE — FERRAMENTA notificar_especialista:
-- Use assim que tiver: nome do cliente, situação clara e horário preferido
-- No campo resumo_caso: inclua a situação, fatos relevantes, análise de documentos (se houver) e pontos importantes para o especialista
-- Após usar a ferramenta, diga ao cliente: "Perfeito, [nome]! O [Dr./Dra. X] vai entrar em contato com você [horário informado]. Pode deixar que ele já vai estar por dentro do seu caso."
+IMPORTANTE — FERRAMENTAS:
+- Use notificar_especialista quando tiver: nome do cliente, situação clara e horário preferido
+- Use reenviar_lembrete quando cliente disser que não foi contatado
+- Após usar qualquer ferramenta, confirme ao cliente de forma natural
 
-ÁREAS E ROTEAMENTO:
+ÁREAS:
 - Trabalhista: demissão, horas extras, assédio, acidente, rescisão → Dr. Rafael Jorge Pinhatti
 - Família: divórcio, pensão, guarda, inventário, herança → Dra. Aline Xavier
 - Imobiliário: compra/venda, locação, usucapião, despejo → Dr. Willian Assis
 - Empresarial: empresa, contratos, sócios, recuperação → Dr. Willian Assis
 - Tributário: dívidas fiscais, impostos, Receita → Dr. Willian Assis
 - Criminal: crimes, BO, defesa criminal → Dra. Aline Xavier
-- Cível/Bancário/Consumidor: dívidas, cobranças, contratos bancários, financiamentos, apreensão de veículo → Dr. Willian Assis
+- Cível/Bancário/Consumidor: dívidas, cobranças, financiamentos, apreensão de veículo → Dr. Willian Assis
 `;
 
 const DOCUMENT_ANALYSIS_PROMPT = `Você é um assistente jurídico especializado do escritório Assis e Xavier Advogados.
@@ -127,49 +120,61 @@ O documento pode ser qualquer tipo: contrato de trabalho, contrato bancário, fi
 
 SUA ANÁLISE DEVE:
 1. Identificar o tipo de documento
-2. Com base no contexto da conversa (situação do cliente), verificar se há elementos jurídicos relevantes para o caso
+2. Com base no contexto da conversa, verificar elementos jurídicos relevantes para o caso
 3. Identificar cláusulas, condições ou ausências que possam favorecer ou prejudicar o cliente
-4. Avaliar, com base na legislação e jurisprudência brasileira, as chances de êxito numa eventual ação
+4. Avaliar as chances de êxito numa eventual ação
 
 SUA RESPOSTA DEVE CONTER APENAS:
 - Tipo do documento identificado
-- Principais pontos relevantes encontrados (máximo 3 pontos, de forma objetiva)
-- Avaliação das chances de êxito: ALTA, MODERADA ou BAIXA — com uma frase explicando o motivo
+- Principais pontos relevantes (máximo 3, objetivamente)
+- Avaliação das chances de êxito: ALTA, MODERADA ou BAIXA — com uma frase de motivo
 
-NÃO faça análise jurídica aprofundada. NÃO use excesso de termos técnicos. A resposta será repassada ao cliente por uma atendente humana.
-Responda em português, de forma clara e direta.`;
+NÃO use juridiquês excessivo. Responda em português, claro e direto.`;
 
 const TOOLS = [
   {
     name: 'notificar_especialista',
-    description: 'Notifica o especialista responsável pela área sobre um novo lead qualificado. Use quando tiver coletado: nome do cliente, situação jurídica clara, horário preferido para contato. Inclua no resumo tudo que o especialista precisa saber antes de ligar.',
+    description: 'Notifica o especialista da área sobre um novo lead qualificado. Use quando tiver: nome do cliente, situação jurídica clara e horário preferido.',
     input_schema: {
       type: 'object',
       properties: {
         area: {
           type: 'string',
           enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor'],
-          description: 'Área jurídica identificada no caso'
+          description: 'Área jurídica do caso'
         },
-        nome_cliente: {
-          type: 'string',
-          description: 'Nome do cliente'
-        },
-        horario_preferido: {
-          type: 'string',
-          description: 'Melhor horário informado pelo cliente para receber contato'
-        },
+        nome_cliente: { type: 'string', description: 'Nome do cliente' },
+        horario_preferido: { type: 'string', description: 'Melhor horário para contato' },
         resumo_caso: {
           type: 'string',
-          description: 'Resumo completo para o especialista: situação, fatos, documentos analisados com resultado, pontos jurídicos relevantes e tudo que ele precisa saber antes de ligar'
+          description: 'Resumo completo: situação, fatos, documentos analisados com resultado, pontos jurídicos relevantes'
         }
       },
       required: ['area', 'nome_cliente', 'horario_preferido', 'resumo_caso']
+    }
+  },
+  {
+    name: 'reenviar_lembrete',
+    description: 'Reenviar lembrete urgente ao especialista quando o cliente informar que ainda não foi contatado.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        area: {
+          type: 'string',
+          enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor'],
+          description: 'Área jurídica do caso'
+        },
+        nome_cliente: { type: 'string', description: 'Nome do cliente que aguarda retorno' }
+      },
+      required: ['area', 'nome_cliente']
     }
   }
 ];
 
 const conversationHistory = loadHistory();
+
+// Debounce: acumula mensagens picadas e processa juntas após 8s de silêncio
+const pendingMessages = {};
 
 function extractText(content) {
   if (typeof content === 'string') return content;
@@ -180,26 +185,74 @@ function extractText(content) {
   return '';
 }
 
-async function executeNotificarEspecialista(input, clientPhone) {
-  const { area, nome_cliente, horario_preferido, resumo_caso } = input;
-  const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
+function buildSystemPrompt(userId) {
+  const history = conversationHistory[userId] || [];
+  const hasHistory = history.length > 0;
+  if (!hasHistory) return OFFICE_CONTEXT;
 
-  const message =
-    `🔔 *NOVO ATENDIMENTO — ${area.toUpperCase().replace('_', '/')}*\n\n` +
-    `👤 *Cliente:* ${nome_cliente}\n` +
-    `📱 *WhatsApp:* +${clientPhone}\n` +
-    `⏰ *Melhor horário para contato:* ${horario_preferido}\n\n` +
-    `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
-    `_Atendimento realizado pela Ana — Assis e Xavier Advogados_`;
+  const clientName = extractClientName(history);
+  const nameNote = clientName ? ` O nome do cliente é ${clientName}.` : '';
+  return OFFICE_CONTEXT +
+    `\n\nATENÇÃO CRÍTICA: Esta conversa JÁ TEM HISTÓRICO.${nameNote} NÃO se apresente novamente. Retome naturalmente de onde parou, como se a conversa nunca tivesse sido interrompida.`;
+}
 
-  try {
-    await sendWhatsAppMessage(specialist.phone, message);
-    console.log(`[Especialista] Notificação enviada para ${specialist.name} (${specialist.phone})`);
-    return `Especialista ${specialist.name} notificado com sucesso.`;
-  } catch (error) {
-    console.error('[Especialista] Erro ao notificar:', error.message);
-    return `Notificação registrada para ${specialist.name}.`;
+function extractClientName(history) {
+  // Tenta extrair o nome do cliente a partir do histórico de mensagens da Ana
+  for (const msg of history) {
+    if (msg.role === 'assistant') {
+      const text = extractText(msg.content);
+      const match = text.match(/(?:seu nome é|você é o\/a|[Pp]erfeito,?\s+)([A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)?)/);
+      if (match) return match[1];
+    }
   }
+  return null;
+}
+
+async function executeTool(toolName, toolInput, clientPhone) {
+  if (toolName === 'notificar_especialista') {
+    const { area, nome_cliente, horario_preferido, resumo_caso } = toolInput;
+    const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
+
+    const message =
+      `🔔 *NOVO ATENDIMENTO — ${area.toUpperCase().replace('_', '/')}*\n\n` +
+      `👤 *Cliente:* ${nome_cliente}\n` +
+      `📱 *WhatsApp:* +${clientPhone}\n` +
+      `⏰ *Melhor horário:* ${horario_preferido}\n\n` +
+      `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
+      `_Atendimento realizado pela Ana — Assis e Xavier Advogados_`;
+
+    try {
+      await sendWhatsAppMessage(specialist.phone, message);
+      console.log(`[Especialista] Notificação enviada para ${specialist.name}`);
+      return `Especialista ${specialist.name} notificado com sucesso.`;
+    } catch (e) {
+      console.error('[Especialista] Erro:', e.message);
+      return `Notificação registrada para ${specialist.name}.`;
+    }
+  }
+
+  if (toolName === 'reenviar_lembrete') {
+    const { area, nome_cliente } = toolInput;
+    const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
+
+    const message =
+      `⏰ *LEMBRETE URGENTE — CLIENTE AGUARDANDO*\n\n` +
+      `👤 *Cliente:* ${nome_cliente}\n` +
+      `📱 *WhatsApp:* +${clientPhone}\n\n` +
+      `O cliente informou que ainda não recebeu seu contato. Por favor, entre em contato o quanto antes.\n\n` +
+      `_Assis e Xavier Advogados_`;
+
+    try {
+      await sendWhatsAppMessage(specialist.phone, message);
+      console.log(`[Lembrete] Reenviado para ${specialist.name}`);
+      return `Lembrete reenviado para ${specialist.name}.`;
+    } catch (e) {
+      console.error('[Lembrete] Erro:', e.message);
+      return `Lembrete registrado para ${specialist.name}.`;
+    }
+  }
+
+  return 'Ferramenta desconhecida.';
 }
 
 async function callClaudeAPI(userMessage, userId) {
@@ -210,49 +263,19 @@ async function callClaudeAPI(userMessage, userId) {
 
     conversationHistory[userId].push({ role: 'user', content: userMessage });
 
-    const firstResponse = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-opus-4-1',
-        max_tokens: 1024,
-        system: OFFICE_CONTEXT,
-        tools: TOOLS,
-        messages: conversationHistory[userId]
-      },
-      {
-        headers: {
-          'x-api-key': CLAUDE_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json'
-        }
-      }
-    );
+    const messages = [...conversationHistory[userId]];
+    let response;
 
-    const firstContent = firstResponse.data.content;
-    const toolUseBlock = firstContent.find(b => b.type === 'tool_use');
-
-    if (toolUseBlock && toolUseBlock.name === 'notificar_especialista') {
-      // Salva o bloco de tool_use no histórico
-      conversationHistory[userId].push({ role: 'assistant', content: firstContent });
-
-      // Executa a notificação
-      const toolResult = await executeNotificarEspecialista(toolUseBlock.input, userId);
-
-      // Adiciona o resultado da ferramenta ao histórico
-      conversationHistory[userId].push({
-        role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResult }]
-      });
-
-      // Segunda chamada para Claude gerar a resposta final ao cliente
-      const finalResponse = await axios.post(
+    // Loop para suportar múltiplas chamadas de ferramenta se necessário
+    while (true) {
+      response = await axios.post(
         'https://api.anthropic.com/v1/messages',
         {
           model: 'claude-opus-4-1',
-          max_tokens: 512,
-          system: OFFICE_CONTEXT,
+          max_tokens: 1024,
+          system: buildSystemPrompt(userId),
           tools: TOOLS,
-          messages: conversationHistory[userId]
+          messages
         },
         {
           headers: {
@@ -263,25 +286,36 @@ async function callClaudeAPI(userMessage, userId) {
         }
       );
 
-      const finalText = extractText(finalResponse.data.content);
-      conversationHistory[userId].push({ role: 'assistant', content: finalText });
+      const content = response.data.content;
+      const toolUseBlock = content.find(b => b.type === 'tool_use');
 
-      if (conversationHistory[userId].length > 40) {
-        conversationHistory[userId] = conversationHistory[userId].slice(-40);
+      if (!toolUseBlock) {
+        // Resposta final sem tool use
+        const assistantText = extractText(content);
+        conversationHistory[userId].push({ role: 'assistant', content: assistantText });
+        break;
       }
-      saveHistory(conversationHistory);
-      return finalText;
-    }
 
-    // Resposta normal sem tool use
-    const assistantText = extractText(firstContent);
-    conversationHistory[userId].push({ role: 'assistant', content: assistantText });
+      // Executa a ferramenta
+      messages.push({ role: 'assistant', content });
+      conversationHistory[userId].push({ role: 'assistant', content });
+
+      const toolResult = await executeTool(toolUseBlock.name, toolUseBlock.input, userId);
+
+      const toolResultMsg = {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResult }]
+      };
+      messages.push(toolResultMsg);
+      conversationHistory[userId].push(toolResultMsg);
+    }
 
     if (conversationHistory[userId].length > 40) {
       conversationHistory[userId] = conversationHistory[userId].slice(-40);
     }
     saveHistory(conversationHistory);
-    return assistantText;
+
+    return extractText(response.data.content);
 
   } catch (error) {
     console.error('[Claude] Erro:', error.response?.data || error.message);
@@ -382,7 +416,7 @@ async function handleDocument(message, userId) {
     return callClaudeAPI(`[ANÁLISE DO DOCUMENTO - ${filename}]\n${analysisResult}`, userId);
   } catch (error) {
     console.error('[Doc] Erro ao processar documento:', error.message);
-    return callClaudeAPI('O cliente enviou um documento mas ocorreu um erro técnico ao processá-lo. Peça para tentar novamente.', userId);
+    return callClaudeAPI('O cliente enviou um documento mas ocorreu um erro técnico. Peça para tentar novamente.', userId);
   }
 }
 
@@ -408,11 +442,11 @@ function typingDelay(text) {
 
 async function sendWhatsAppMessage(to, message) {
   if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
-    console.error('[Meta] Parâmetros ausentes para envio:', { to, PHONE_NUMBER_ID: !!PHONE_NUMBER_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN });
+    console.error('[Meta] Parâmetros ausentes:', { to, PHONE_NUMBER_ID: !!PHONE_NUMBER_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN });
     return;
   }
 
-  console.log(`[Meta] Enviando mensagem para: ${to}`);
+  console.log(`[Meta] Enviando para: ${to}`);
 
   try {
     const response = await axios.post(
@@ -430,10 +464,10 @@ async function sendWhatsAppMessage(to, message) {
         }
       }
     );
-    console.log(`[Meta] Mensagem enviada. ID: ${response.data.messages?.[0]?.id}`);
+    console.log(`[Meta] Enviada. ID: ${response.data.messages?.[0]?.id}`);
     return response.data;
   } catch (error) {
-    console.error('[Meta] Erro ao enviar mensagem:', error.response?.data || error.message);
+    console.error('[Meta] Erro ao enviar:', error.response?.data || error.message);
   }
 }
 
@@ -443,11 +477,10 @@ app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('[Webhook] Verificação concluída com sucesso.');
+    console.log('[Webhook] Verificação OK.');
     return res.status(200).send(challenge);
   }
 
-  console.error('[Webhook] Falha na verificação. Token recebido:', token);
   res.sendStatus(403);
 });
 
@@ -467,6 +500,7 @@ app.post('/webhook', async (req, res) => {
 
     await markAsRead(messageId);
 
+    // Áudio
     if (message.type === 'audio' || message.type === 'voice') {
       const audioReplies = [
         'Ouvi seu áudio! Me conta um pouco mais por escrito? Assim consigo te direcionar para o especialista certo aqui no escritório.',
@@ -479,7 +513,18 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // Documento ou imagem — flush mensagens de texto pendentes primeiro
     if (message.type === 'document' || message.type === 'image') {
+      if (pendingMessages[senderNumber]) {
+        clearTimeout(pendingMessages[senderNumber].timer);
+        const pending = pendingMessages[senderNumber];
+        delete pendingMessages[senderNumber];
+        // Adiciona textos pendentes ao histórico sem gerar resposta
+        if (!conversationHistory[senderNumber]) conversationHistory[senderNumber] = [];
+        conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n') });
+        saveHistory(conversationHistory);
+      }
+
       console.log(`[Webhook] ${message.type} recebido de ${senderNumber}`);
       const reply = await handleDocument(message, senderNumber);
       await typingDelay(reply);
@@ -487,17 +532,39 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // Ignora outros tipos
     if (message.type !== 'text') return;
 
     const incomingText = message.text.body;
-    console.log(`[Webhook] Mensagem de ${senderNumber}: ${incomingText}`);
+    console.log(`[Webhook] Texto de ${senderNumber}: ${incomingText}`);
 
-    const reply = await callClaudeAPI(incomingText, senderNumber);
-    await typingDelay(reply);
-    await sendWhatsAppMessage(senderNumber, reply);
+    // Debounce: acumula mensagens e aguarda 8s após a última
+    if (pendingMessages[senderNumber]) {
+      clearTimeout(pendingMessages[senderNumber].timer);
+      pendingMessages[senderNumber].messages.push(incomingText);
+    } else {
+      pendingMessages[senderNumber] = { messages: [incomingText] };
+    }
+
+    pendingMessages[senderNumber].timer = setTimeout(async () => {
+      const batch = pendingMessages[senderNumber];
+      if (!batch) return;
+      delete pendingMessages[senderNumber];
+
+      const combined = batch.messages.join('\n');
+      console.log(`[Batch] Processando ${batch.messages.length} mensagem(ns) de ${senderNumber}`);
+
+      try {
+        const reply = await callClaudeAPI(combined, senderNumber);
+        await typingDelay(reply);
+        await sendWhatsAppMessage(senderNumber, reply);
+      } catch (error) {
+        console.error('[Batch] Erro ao processar:', error);
+      }
+    }, 8000);
 
   } catch (error) {
-    console.error('[Webhook] Erro ao processar mensagem:', error);
+    console.error('[Webhook] Erro:', error);
   }
 });
 
@@ -506,7 +573,7 @@ app.get('/health', (req, res) => {
     status: 'OK',
     message: 'Chatbot está funcionando!',
     api: 'Meta WhatsApp Cloud API',
-    features: ['texto', 'áudio', 'documentos PDF', 'imagens', 'análise jurídica', 'notificação de especialistas'],
+    features: ['texto com debounce 8s', 'áudio', 'PDF', 'imagens', 'análise jurídica', 'notificação de especialistas', 'lembrete automático'],
     specialists: Object.entries(SPECIALISTS).map(([area, s]) => ({ area, name: s.name })),
     config: {
       WHATSAPP_TOKEN: WHATSAPP_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
