@@ -187,25 +187,20 @@ function extractText(content) {
 
 function buildSystemPrompt(userId) {
   const history = conversationHistory[userId] || [];
-  const hasHistory = history.length > 0;
-  if (!hasHistory) return OFFICE_CONTEXT;
+  const textMessages = history.filter(m => typeof m.content === 'string' && m.content.trim());
 
-  const clientName = extractClientName(history);
-  const nameNote = clientName ? ` O nome do cliente é ${clientName}.` : '';
+  if (textMessages.length === 0) return OFFICE_CONTEXT;
+
+  // Inclui as últimas mensagens reais para o Claude ter contexto correto
+  const recentLines = textMessages
+    .slice(-8)
+    .map(m => `${m.role === 'user' ? 'Cliente' : 'Ana'}: ${m.content}`)
+    .join('\n');
+
   return OFFICE_CONTEXT +
-    `\n\nATENÇÃO CRÍTICA: Esta conversa JÁ TEM HISTÓRICO.${nameNote} NÃO se apresente novamente. Retome naturalmente de onde parou, como se a conversa nunca tivesse sido interrompida.`;
-}
-
-function extractClientName(history) {
-  // Tenta extrair o nome do cliente a partir do histórico de mensagens da Ana
-  for (const msg of history) {
-    if (msg.role === 'assistant') {
-      const text = extractText(msg.content);
-      const match = text.match(/(?:seu nome é|você é o\/a|[Pp]erfeito,?\s+)([A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)?)/);
-      if (match) return match[1];
-    }
-  }
-  return null;
+    `\n\nATENÇÃO CRÍTICA — CONVERSA EM ANDAMENTO:\n` +
+    `Você JÁ está atendendo este cliente. NÃO se apresente. Retome exatamente de onde parou.\n\n` +
+    `ÚLTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
 }
 
 async function executeTool(toolName, toolInput, clientPhone) {
@@ -224,6 +219,12 @@ async function executeTool(toolName, toolInput, clientPhone) {
     try {
       await sendWhatsAppMessage(specialist.phone, message);
       console.log(`[Especialista] Notificação enviada para ${specialist.name}`);
+      // Limpa histórico após 20s — caso encerrado, próxima mensagem inicia conversa nova
+      setTimeout(() => {
+        delete conversationHistory[clientPhone];
+        saveHistory(conversationHistory);
+        console.log(`[Histórico] Limpo para ${clientPhone} após encerramento do caso`);
+      }, 20000);
       return `Especialista ${specialist.name} notificado com sucesso.`;
     } catch (e) {
       console.error('[Especialista] Erro:', e.message);
