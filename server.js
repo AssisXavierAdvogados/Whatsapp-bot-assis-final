@@ -188,12 +188,28 @@ app.post('/webhook', async (req, res) => {
     if (!messages || messages.length === 0) return;
 
     const message = messages[0];
+    const senderNumber = message.from;
+    const messageId = message.id;
 
+    await markAsRead(messageId);
+
+    // Áudio: responde de forma natural pedindo que escreva
+    if (message.type === 'audio' || message.type === 'voice') {
+      const audioReplies = [
+        'Ouvi seu áudio! Me conta um pouco mais por escrito? Assim consigo te direcionar para o especialista certo aqui no escritório.',
+        'Recebi seu áudio! Para garantir que nada se perca, pode me resumir aqui o que está acontecendo?',
+        'Escutei! Me escreve rapidinho o que precisa, assim já te passo para o advogado certo.'
+      ];
+      const reply = audioReplies[Math.floor(Math.random() * audioReplies.length)];
+      await typingDelay(reply);
+      await sendWhatsAppMessage(senderNumber, reply);
+      return;
+    }
+
+    // Ignora outros tipos (imagem, vídeo, documento, sticker, etc.)
     if (message.type !== 'text') return;
 
-    const senderNumber = message.from;
     const incomingText = message.text.body;
-    const messageId = message.id;
 
     console.log(`[Webhook] Mensagem de ${senderNumber}: ${incomingText}`);
 
