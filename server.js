@@ -37,7 +37,7 @@ const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 
 // Especialistas do escritório — edite aqui para atualizar nomes/números
 const SPECIALISTS = {
-  trabalhista:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  trabalhista:   { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087' },
   imobiliario:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
   tributario:    { name: 'Dr. Willian Assis',  phone: '5544999784442' },
   civel_bancario:{ name: 'Dr. Willian Assis',  phone: '5544999784442' },
@@ -48,7 +48,7 @@ const SPECIALISTS = {
 };
 
 const SPECIALIST_NAMES = {
-  trabalhista:    'Dr. Willian Assis',
+  trabalhista:    'Dr. Rafael Jorge Pinhatti',
   imobiliario:    'Dr. Willian Assis',
   tributario:     'Dr. Willian Assis',
   civel_bancario: 'Dr. Willian Assis',
@@ -79,7 +79,8 @@ REGRAS DE OURO:
 - Nunca use termos como "Claro!", "Com certeza!", "Olá!" repetidamente — varie
 
 ESPECIALISTAS DO ESCRITÓRIO:
-- Trabalhista, Imobiliário, Tributário, Cível/Bancário, Empresarial, Consumidor → Dr. Willian Assis
+- Trabalhista → Dr. Rafael Jorge Pinhatti
+- Imobiliário, Tributário, Cível/Bancário, Empresarial, Consumidor → Dr. Willian Assis
 - Família e Criminal → Dra. Aline Xavier
 
 FLUXO DE ATENDIMENTO (siga essa ordem):
@@ -110,7 +111,7 @@ IMPORTANTE — FERRAMENTA notificar_especialista:
 - Após usar a ferramenta, diga ao cliente: "Perfeito, [nome]! O [Dr./Dra. X] vai entrar em contato com você [horário informado]. Pode deixar que ele já vai estar por dentro do seu caso."
 
 ÁREAS E ROTEAMENTO:
-- Trabalhista: demissão, horas extras, assédio, acidente, rescisão → Dr. Willian Assis
+- Trabalhista: demissão, horas extras, assédio, acidente, rescisão → Dr. Rafael Jorge Pinhatti
 - Família: divórcio, pensão, guarda, inventário, herança → Dra. Aline Xavier
 - Imobiliário: compra/venda, locação, usucapião, despejo → Dr. Willian Assis
 - Empresarial: empresa, contratos, sócios, recuperação → Dr. Willian Assis
