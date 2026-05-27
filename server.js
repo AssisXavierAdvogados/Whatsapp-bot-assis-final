@@ -35,6 +35,29 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 
+// Especialistas do escritório — edite aqui para atualizar nomes/números
+const SPECIALISTS = {
+  trabalhista:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  imobiliario:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  tributario:    { name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  civel_bancario:{ name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  empresarial:   { name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  consumidor:    { name: 'Dr. Willian Assis',  phone: '5544999784442' },
+  familia:       { name: 'Dra. Aline Xavier',  phone: '5544991651532' },
+  criminal:      { name: 'Dra. Aline Xavier',  phone: '5544991651532' },
+};
+
+const SPECIALIST_NAMES = {
+  trabalhista:    'Dr. Willian Assis',
+  imobiliario:    'Dr. Willian Assis',
+  tributario:     'Dr. Willian Assis',
+  civel_bancario: 'Dr. Willian Assis',
+  empresarial:    'Dr. Willian Assis',
+  consumidor:     'Dr. Willian Assis',
+  familia:        'Dra. Aline Xavier',
+  criminal:       'Dra. Aline Xavier',
+};
+
 const OFFICE_CONTEXT = `
 Você é Ana, atendente do Assis e Xavier Advogados, escritório jurídico full service em Maringá, Paraná.
 
@@ -55,6 +78,10 @@ REGRAS DE OURO:
 - Nunca invente informações jurídicas nem dê pareceres definitivos
 - Nunca use termos como "Claro!", "Com certeza!", "Olá!" repetidamente — varie
 
+ESPECIALISTAS DO ESCRITÓRIO:
+- Trabalhista, Imobiliário, Tributário, Cível/Bancário, Empresarial, Consumidor → Dr. Willian Assis
+- Família e Criminal → Dra. Aline Xavier
+
 FLUXO DE ATENDIMENTO (siga essa ordem):
 1. Primeira mensagem: se apresente brevemente e pergunte o que está acontecendo
 2. Com a resposta, identifique a área jurídica
@@ -65,31 +92,31 @@ FLUXO DE ATENDIMENTO (siga essa ordem):
 7. Após receber e analisar o documento: informe o resultado de forma clara e simples, sem juridiquês
 8. Peça o nome do cliente
 9. Pergunte o melhor horário para o especialista ligar
+10. Com nome + horário em mãos: use a ferramenta notificar_especialista, informe o nome do especialista ao cliente e encerre com naturalidade
 
 IMPORTANTE — APRESENTAÇÃO:
 - Se já existe histórico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
 - Só se apresente uma única vez, na primeira mensagem da conversa.
-- Se o cliente mudar de assunto, responda normalmente sem se reapresentar.
 
 IMPORTANTE — ANÁLISE DE DOCUMENTOS:
-- Quando receber uma mensagem começando com "[ANÁLISE DO DOCUMENTO]", use esse resultado para informar o cliente de forma simples
-- Não repasse a análise técnica — traduza em linguagem humana e acolhedora
-- Foque na conclusão mais importante: a pessoa tem chance ou não tem chance?
-- Exemplo de resposta: "Dei uma olhada no documento. Pelo que vi, as chances de conseguir algo são boas — tem alguns pontos que o nosso especialista pode trabalhar. Qual é o seu nome?"
-- Outro exemplo: "Analisei aqui. As chances são mais difíceis nesse caso, mas ainda vale o especialista avaliar com calma. Como você se chama?"
-- Após informar, siga o fluxo: peça o nome e o melhor horário para ligar
+- Quando receber uma mensagem começando com "[ANÁLISE DO DOCUMENTO]", use esse resultado para informar o cliente
+- Traduza para linguagem simples e humana — sem juridiquês
+- Seja direta: informe se a pessoa tem ou não chances de êxito
+- Após informar, continue o fluxo: peça o nome e o melhor horário para ligar
 
-ÁREAS E QUANDO DIRECIONAR:
-- Trabalhista: demissão, horas extras, assédio, acidente de trabalho, verbas rescisórias
-- Família: divórcio, pensão, guarda, inventário, herança
-- Imobiliário: compra/venda de imóvel, locação, usucapião, despejo
-- Empresarial: abertura/encerramento de empresa, contratos, sócios, recuperação judicial
-- Tributário: dívidas fiscais, impostos, parcelamentos com a Receita
-- Criminal: crimes, boletim de ocorrência, defesa criminal
-- Cível/Bancário: dívidas, cobranças, danos morais, contratos bancários, financiamentos, alienação fiduciária, apreensão de veículo, cobranças abusivas
+IMPORTANTE — FERRAMENTA notificar_especialista:
+- Use assim que tiver: nome do cliente, situação clara e horário preferido
+- No campo resumo_caso: inclua a situação, fatos relevantes, análise de documentos (se houver) e pontos importantes para o especialista
+- Após usar a ferramenta, diga ao cliente: "Perfeito, [nome]! O [Dr./Dra. X] vai entrar em contato com você [horário informado]. Pode deixar que ele já vai estar por dentro do seu caso."
 
-QUANDO TIVER O SUFICIENTE PARA DIRECIONAR:
-Diga: "Entendi sua situação. Vou passar para o nosso especialista em [área]. Qual o melhor horário para ele entrar em contato com você?"
+ÁREAS E ROTEAMENTO:
+- Trabalhista: demissão, horas extras, assédio, acidente, rescisão → Dr. Willian Assis
+- Família: divórcio, pensão, guarda, inventário, herança → Dra. Aline Xavier
+- Imobiliário: compra/venda, locação, usucapião, despejo → Dr. Willian Assis
+- Empresarial: empresa, contratos, sócios, recuperação → Dr. Willian Assis
+- Tributário: dívidas fiscais, impostos, Receita → Dr. Willian Assis
+- Criminal: crimes, BO, defesa criminal → Dra. Aline Xavier
+- Cível/Bancário/Consumidor: dívidas, cobranças, contratos bancários, financiamentos, apreensão de veículo → Dr. Willian Assis
 `;
 
 const DOCUMENT_ANALYSIS_PROMPT = `Você é um assistente jurídico especializado do escritório Assis e Xavier Advogados.
@@ -111,7 +138,68 @@ SUA RESPOSTA DEVE CONTER APENAS:
 NÃO faça análise jurídica aprofundada. NÃO use excesso de termos técnicos. A resposta será repassada ao cliente por uma atendente humana.
 Responda em português, de forma clara e direta.`;
 
+const TOOLS = [
+  {
+    name: 'notificar_especialista',
+    description: 'Notifica o especialista responsável pela área sobre um novo lead qualificado. Use quando tiver coletado: nome do cliente, situação jurídica clara, horário preferido para contato. Inclua no resumo tudo que o especialista precisa saber antes de ligar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        area: {
+          type: 'string',
+          enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor'],
+          description: 'Área jurídica identificada no caso'
+        },
+        nome_cliente: {
+          type: 'string',
+          description: 'Nome do cliente'
+        },
+        horario_preferido: {
+          type: 'string',
+          description: 'Melhor horário informado pelo cliente para receber contato'
+        },
+        resumo_caso: {
+          type: 'string',
+          description: 'Resumo completo para o especialista: situação, fatos, documentos analisados com resultado, pontos jurídicos relevantes e tudo que ele precisa saber antes de ligar'
+        }
+      },
+      required: ['area', 'nome_cliente', 'horario_preferido', 'resumo_caso']
+    }
+  }
+];
+
 const conversationHistory = loadHistory();
+
+function extractText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const textBlock = content.find(b => b.type === 'text');
+    return textBlock?.text || '';
+  }
+  return '';
+}
+
+async function executeNotificarEspecialista(input, clientPhone) {
+  const { area, nome_cliente, horario_preferido, resumo_caso } = input;
+  const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
+
+  const message =
+    `🔔 *NOVO ATENDIMENTO — ${area.toUpperCase().replace('_', '/')}*\n\n` +
+    `👤 *Cliente:* ${nome_cliente}\n` +
+    `📱 *WhatsApp:* +${clientPhone}\n` +
+    `⏰ *Melhor horário para contato:* ${horario_preferido}\n\n` +
+    `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
+    `_Atendimento realizado pela Ana — Assis e Xavier Advogados_`;
+
+  try {
+    await sendWhatsAppMessage(specialist.phone, message);
+    console.log(`[Especialista] Notificação enviada para ${specialist.name} (${specialist.phone})`);
+    return `Especialista ${specialist.name} notificado com sucesso.`;
+  } catch (error) {
+    console.error('[Especialista] Erro ao notificar:', error.message);
+    return `Notificação registrada para ${specialist.name}.`;
+  }
+}
 
 async function callClaudeAPI(userMessage, userId) {
   try {
@@ -121,12 +209,13 @@ async function callClaudeAPI(userMessage, userId) {
 
     conversationHistory[userId].push({ role: 'user', content: userMessage });
 
-    const response = await axios.post(
+    const firstResponse = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: 'claude-opus-4-1',
         max_tokens: 1024,
         system: OFFICE_CONTEXT,
+        tools: TOOLS,
         messages: conversationHistory[userId]
       },
       {
@@ -138,17 +227,61 @@ async function callClaudeAPI(userMessage, userId) {
       }
     );
 
-    const assistantMessage = response.data.content[0].text;
+    const firstContent = firstResponse.data.content;
+    const toolUseBlock = firstContent.find(b => b.type === 'tool_use');
 
-    conversationHistory[userId].push({ role: 'assistant', content: assistantMessage });
+    if (toolUseBlock && toolUseBlock.name === 'notificar_especialista') {
+      // Salva o bloco de tool_use no histórico
+      conversationHistory[userId].push({ role: 'assistant', content: firstContent });
 
-    if (conversationHistory[userId].length > 30) {
-      conversationHistory[userId] = conversationHistory[userId].slice(-30);
+      // Executa a notificação
+      const toolResult = await executeNotificarEspecialista(toolUseBlock.input, userId);
+
+      // Adiciona o resultado da ferramenta ao histórico
+      conversationHistory[userId].push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResult }]
+      });
+
+      // Segunda chamada para Claude gerar a resposta final ao cliente
+      const finalResponse = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model: 'claude-opus-4-1',
+          max_tokens: 512,
+          system: OFFICE_CONTEXT,
+          tools: TOOLS,
+          messages: conversationHistory[userId]
+        },
+        {
+          headers: {
+            'x-api-key': CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json'
+          }
+        }
+      );
+
+      const finalText = extractText(finalResponse.data.content);
+      conversationHistory[userId].push({ role: 'assistant', content: finalText });
+
+      if (conversationHistory[userId].length > 40) {
+        conversationHistory[userId] = conversationHistory[userId].slice(-40);
+      }
+      saveHistory(conversationHistory);
+      return finalText;
     }
 
-    saveHistory(conversationHistory);
+    // Resposta normal sem tool use
+    const assistantText = extractText(firstContent);
+    conversationHistory[userId].push({ role: 'assistant', content: assistantText });
 
-    return assistantMessage;
+    if (conversationHistory[userId].length > 40) {
+      conversationHistory[userId] = conversationHistory[userId].slice(-40);
+    }
+    saveHistory(conversationHistory);
+    return assistantText;
+
   } catch (error) {
     console.error('[Claude] Erro:', error.response?.data || error.message);
     return `Desculpe, tive um problema técnico. Entre em contato via WhatsApp: ${ESCRITORIO_PHONE}`;
@@ -178,14 +311,8 @@ async function analyzeDocumentWithClaude(buffer, mimeType, conversationContext) 
     if (mimeType.startsWith('image/')) {
       const base64 = buffer.toString('base64');
       userContent = [
-        {
-          type: 'image',
-          source: { type: 'base64', media_type: mimeType, data: base64 }
-        },
-        {
-          type: 'text',
-          text: `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}`
-        }
+        { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+        { type: 'text', text: `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}` }
       ];
     } else if (mimeType === 'application/pdf') {
       const pdfData = await pdfParse(buffer);
@@ -242,7 +369,7 @@ async function handleDocument(message, userId) {
     const history = conversationHistory[userId] || [];
     const recentHistory = history
       .slice(-10)
-      .map(m => `${m.role === 'user' ? 'Cliente' : 'Ana'}: ${typeof m.content === 'string' ? m.content : '[arquivo]'}`)
+      .map(m => `${m.role === 'user' ? 'Cliente' : 'Ana'}: ${extractText(m.content) || '[arquivo]'}`)
       .join('\n');
 
     const analysisResult = await analyzeDocumentWithClaude(buffer, mimeType, recentHistory);
@@ -339,7 +466,6 @@ app.post('/webhook', async (req, res) => {
 
     await markAsRead(messageId);
 
-    // Áudio
     if (message.type === 'audio' || message.type === 'voice') {
       const audioReplies = [
         'Ouvi seu áudio! Me conta um pouco mais por escrito? Assim consigo te direcionar para o especialista certo aqui no escritório.',
@@ -352,7 +478,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Documento (PDF, Word, etc.) ou Imagem
     if (message.type === 'document' || message.type === 'image') {
       console.log(`[Webhook] ${message.type} recebido de ${senderNumber}`);
       const reply = await handleDocument(message, senderNumber);
@@ -361,7 +486,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Ignora outros tipos (vídeo, sticker, localização, etc.)
     if (message.type !== 'text') return;
 
     const incomingText = message.text.body;
@@ -381,7 +505,8 @@ app.get('/health', (req, res) => {
     status: 'OK',
     message: 'Chatbot está funcionando!',
     api: 'Meta WhatsApp Cloud API',
-    features: ['texto', 'áudio', 'documentos PDF', 'imagens', 'análise jurídica'],
+    features: ['texto', 'áudio', 'documentos PDF', 'imagens', 'análise jurídica', 'notificação de especialistas'],
+    specialists: Object.entries(SPECIALISTS).map(([area, s]) => ({ area, name: s.name })),
     config: {
       WHATSAPP_TOKEN: WHATSAPP_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
       PHONE_NUMBER_ID: PHONE_NUMBER_ID ? `${PHONE_NUMBER_ID.slice(0, 6)}...` : 'NAO DEFINIDO',
