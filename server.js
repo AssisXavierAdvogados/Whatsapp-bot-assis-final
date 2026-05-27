@@ -44,6 +44,7 @@ const SPECIALISTS = {
   consumidor:     { name: 'Dr. Willian Assis',         phone: '5544999784442' },
   familia:        { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
   criminal:       { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
+  previdenciario: { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
 };
 
 const OFFICE_CONTEXT = `
@@ -69,7 +70,7 @@ REGRAS DE OURO:
 ESPECIALISTAS DO ESCRITÓRIO:
 - Trabalhista → Dr. Rafael Jorge Pinhatti
 - Imobiliário, Tributário, Cível/Bancário, Empresarial, Consumidor → Dr. Willian Assis
-- Família e Criminal → Dra. Aline Xavier
+- Família, Criminal e Previdenciário → Dra. Aline Xavier
 
 FLUXO DE ATENDIMENTO (siga essa ordem):
 1. Primeira mensagem: se apresente brevemente e pergunte o que está acontecendo
@@ -110,7 +111,13 @@ IMPORTANTE — FERRAMENTAS:
 - Empresarial: empresa, contratos, sócios, recuperação → Dr. Willian Assis
 - Tributário: dívidas fiscais, impostos, Receita → Dr. Willian Assis
 - Criminal: crimes, BO, defesa criminal → Dra. Aline Xavier
+- Previdenciário: aposentadoria, benefícios INSS, pensão por morte, auxílio-doença, invalidez → Dra. Aline Xavier
 - Cível/Bancário/Consumidor: dívidas, cobranças, financiamentos, apreensão de veículo → Dr. Willian Assis
+
+HONORÁRIOS ADVOCATÍCIOS — COMO RESPONDER SE O CLIENTE PERGUNTAR:
+- Se for caso de Direito do Consumidor (dano moral, dano material, cobranças abusivas, contratos de consumo): informe que o contrato é de 30% do valor que o cliente vier a receber, seja de dano moral ou dano material. Não cobre nada adiantado.
+- Se for qualquer outro caso (usucapião, reintegração de posse, criminal, trabalhista, tributário, família, previdenciário, etc.): diga que os honorários dependem da análise do caso e que o especialista vai passar o valor após a consulta. Não invente valores.
+- Nunca dê valores além do que está descrito acima.
 `;
 
 const DOCUMENT_ANALYSIS_PROMPT = `Você é um assistente jurídico especializado do escritório Assis e Xavier Advogados.
@@ -140,7 +147,7 @@ const TOOLS = [
       properties: {
         area: {
           type: 'string',
-          enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor'],
+          enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor', 'previdenciario'],
           description: 'Área jurídica do caso'
         },
         nome_cliente: { type: 'string', description: 'Nome do cliente' },
@@ -161,7 +168,7 @@ const TOOLS = [
       properties: {
         area: {
           type: 'string',
-          enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor'],
+          enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor', 'previdenciario'],
           description: 'Área jurídica do caso'
         },
         nome_cliente: { type: 'string', description: 'Nome do cliente que aguarda retorno' }
