@@ -8,14 +8,14 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: TWILIO_PHONE
-        value: whatsapp:+14155238886
       - key: ESCRITORIO_PHONE
         value: "+55 (44)99977-8551"
-      # As 3 variáveis abaixo precisam ser preenchidas manualmente no painel do Render
+      - key: VERIFY_TOKEN
+        value: assis-xavier-verify-token
+      # Preencher manualmente no painel do Render
       - key: CLAUDE_API_KEY
         sync: false
-      - key: TWILIO_ACCOUNT_SID
+      - key: WHATSAPP_TOKEN
         sync: false
-      - key: TWILIO_AUTH_TOKEN
+      - key: PHONE_NUMBER_ID
         sync: false
