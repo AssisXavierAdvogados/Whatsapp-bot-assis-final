@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "start:ads": "node ads-agent.js",
+    "dev:ads": "nodemon ads-agent.js"
   },
   "keywords": ["whatsapp", "chatbot", "claude", "twilio", "advogados"],
   "author": "Assis e Xavier Advogados",
