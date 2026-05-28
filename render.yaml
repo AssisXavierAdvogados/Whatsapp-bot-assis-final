@@ -19,3 +19,32 @@ services:
         sync: false
       - key: PHONE_NUMBER_ID
         sync: false
+
+  - type: web
+    name: assis-xavier-ads-agent
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:ads
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ADS_VERIFY_TOKEN
+        value: ads-agent-verify-token
+      - key: META_AD_ACCOUNT_ID
+        value: act_2543342975818856
+      - key: META_PAGE_ID
+        value: "161951133661934"
+      - key: META_WHATSAPP_NUMBER
+        value: "5544999784442"
+      - key: OWNER_PHONE
+        value: "5544999784442"
+      # Preencher manualmente no painel do Render
+      - key: CLAUDE_API_KEY
+        sync: false
+      - key: META_ADS_TOKEN
+        sync: false
+      - key: ADS_WHATSAPP_TOKEN
+        sync: false
+      - key: ADS_PHONE_NUMBER_ID
+        sync: false

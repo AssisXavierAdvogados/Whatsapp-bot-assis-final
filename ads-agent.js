@@ -10,24 +10,24 @@ const app = express();
 const PORT = process.env.ADS_PORT || 3001;
 app.use(express.json());
 
-const META_ADS_TOKEN    = process.env.META_ADS_TOKEN;
-const META_AD_ACCOUNT_ID = process.env.META_AD_ACCOUNT_ID; // formato: act_XXXXXXXXXX
-const META_PAGE_ID      = process.env.META_PAGE_ID;
+const META_ADS_TOKEN       = process.env.META_ADS_TOKEN;
+const META_AD_ACCOUNT_ID   = process.env.META_AD_ACCOUNT_ID;
+const META_PAGE_ID         = process.env.META_PAGE_ID;
 const META_WHATSAPP_NUMBER = process.env.META_WHATSAPP_NUMBER || '5544999784442';
-const CLAUDE_API_KEY    = process.env.CLAUDE_API_KEY;
+const CLAUDE_API_KEY       = process.env.CLAUDE_API_KEY;
 const ADS_WHATSAPP_TOKEN   = process.env.ADS_WHATSAPP_TOKEN;
 const ADS_PHONE_NUMBER_ID  = process.env.ADS_PHONE_NUMBER_ID;
 const ADS_VERIFY_TOKEN     = process.env.ADS_VERIFY_TOKEN || 'ads-agent-verify-token';
+const OWNER_PHONE          = process.env.OWNER_PHONE || '5544999784442';
 
-const META_API = 'https://graph.facebook.com/v19.0';
+const META_API     = 'https://graph.facebook.com/v21.0';
 const HISTORY_FILE = path.join('/tmp', 'ads_history.json');
 
-// Maringá, PR — coordenadas centrais
-const MARINGA_LAT  = -23.4205;
-const MARINGA_LNG  = -51.9333;
+const MARINGA_LAT       = -23.4205;
+const MARINGA_LNG       = -51.9333;
 const DEFAULT_RADIUS_KM = 30;
 
-// ── Histórico de conversa ────────────────────────────────────────────────────
+// ── Histórico ────────────────────────────────────────────────────────────────
 let conversationHistory = {};
 
 function loadHistory() {
@@ -97,10 +97,13 @@ async function criarConjunto({ campaignId, nome, orcamentoDiario, diasDuracao, i
   };
 
   if (objective === 'OUTCOME_TRAFFIC') {
-    body.destination_type   = 'WHATSAPP';
-    body.optimization_goal  = 'LINK_CLICKS';
+    body.destination_type  = 'WHATSAPP';
+    body.optimization_goal = 'LINK_CLICKS';
+  } else if (objective === 'OUTCOME_AWARENESS') {
+    body.optimization_goal = 'AD_RECALL_LIFT';
   } else {
-    body.optimization_goal  = 'REACH';
+    // OUTCOME_REACH
+    body.optimization_goal = 'REACH';
   }
 
   return metaPost(`${META_AD_ACCOUNT_ID}/adsets`, body);
@@ -144,7 +147,7 @@ async function criarAnuncio({ nome, adSetId, creativeId }) {
 
 async function listarCampanhas() {
   const data = await metaGet(`${META_AD_ACCOUNT_ID}/campaigns`, {
-    fields: 'id,name,objective,status,daily_budget'
+    fields: 'id,name,objective,status'
   });
   return data.data || [];
 }
@@ -174,30 +177,46 @@ const ADS_TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        nome_campanha:   { type: 'string',  description: 'Nome da campanha' },
-        orcamento_diario:{ type: 'number',  description: 'Orçamento diário em R$' },
-        duracao_dias:    { type: 'number',  description: 'Quantos dias a campanha vai rodar' },
-        texto_anuncio:   { type: 'string',  description: 'Texto principal do anúncio (~125 caracteres)' },
-        titulo_anuncio:  { type: 'string',  description: 'Título/headline do anúncio' },
-        url_imagem:      { type: 'string',  description: 'URL da imagem (opcional)' },
-        idade_min:       { type: 'number',  description: 'Idade mínima do público (padrão 25)' },
-        idade_max:       { type: 'number',  description: 'Idade máxima do público (padrão 60)' }
+        nome_campanha:    { type: 'string', description: 'Nome da campanha' },
+        orcamento_diario: { type: 'number', description: 'Orçamento diário em R$' },
+        duracao_dias:     { type: 'number', description: 'Quantos dias a campanha vai rodar' },
+        texto_anuncio:    { type: 'string', description: 'Texto principal do anúncio (~125 caracteres)' },
+        titulo_anuncio:   { type: 'string', description: 'Título/headline do anúncio' },
+        url_imagem:       { type: 'string', description: 'URL da imagem (opcional)' },
+        idade_min:        { type: 'number', description: 'Idade mínima do público (padrão 25)' },
+        idade_max:        { type: 'number', description: 'Idade máxima do público (padrão 60)' }
       },
       required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio']
     }
   },
   {
     name: 'criar_campanha_awareness',
-    description: 'Cria campanha de reconhecimento de marca no Meta Ads. Use para aumentar visibilidade do escritório na região.',
+    description: 'Cria campanha de reconhecimento de marca no Meta Ads. Use para aumentar a lembrança do escritório na região.',
     input_schema: {
       type: 'object',
       properties: {
-        nome_campanha:   { type: 'string', description: 'Nome da campanha' },
-        orcamento_diario:{ type: 'number', description: 'Orçamento diário em R$' },
-        duracao_dias:    { type: 'number', description: 'Quantos dias a campanha vai rodar' },
-        texto_anuncio:   { type: 'string', description: 'Texto principal do anúncio' },
-        titulo_anuncio:  { type: 'string', description: 'Título/headline do anúncio' },
-        url_imagem:      { type: 'string', description: 'URL da imagem (opcional)' }
+        nome_campanha:    { type: 'string', description: 'Nome da campanha' },
+        orcamento_diario: { type: 'number', description: 'Orçamento diário em R$' },
+        duracao_dias:     { type: 'number', description: 'Quantos dias a campanha vai rodar' },
+        texto_anuncio:    { type: 'string', description: 'Texto principal do anúncio' },
+        titulo_anuncio:   { type: 'string', description: 'Título/headline do anúncio' },
+        url_imagem:       { type: 'string', description: 'URL da imagem (opcional)' }
+      },
+      required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio']
+    }
+  },
+  {
+    name: 'criar_campanha_alcance',
+    description: 'Cria campanha de alcance máximo no Meta Ads. Use para atingir o maior número possível de pessoas na região.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome_campanha:    { type: 'string', description: 'Nome da campanha' },
+        orcamento_diario: { type: 'number', description: 'Orçamento diário em R$' },
+        duracao_dias:     { type: 'number', description: 'Quantos dias a campanha vai rodar' },
+        texto_anuncio:    { type: 'string', description: 'Texto principal do anúncio' },
+        titulo_anuncio:   { type: 'string', description: 'Título/headline do anúncio' },
+        url_imagem:       { type: 'string', description: 'URL da imagem (opcional)' }
       },
       required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio']
     }
@@ -209,10 +228,10 @@ const ADS_TOOLS = [
   },
   {
     name: 'pausar_campanha',
-    description: 'Pausa uma campanha pelo ID.',
+    description: 'Pausa uma campanha pelo ID numérico.',
     input_schema: {
       type: 'object',
-      properties: { campaign_id: { type: 'string', description: 'ID da campanha' } },
+      properties: { campaign_id: { type: 'string', description: 'ID numérico da campanha (somente números)' } },
       required: ['campaign_id']
     }
   },
@@ -221,12 +240,12 @@ const ADS_TOOLS = [
     description: 'Ativa (publica) uma campanha que estava pausada.',
     input_schema: {
       type: 'object',
-      properties: { campaign_id: { type: 'string', description: 'ID da campanha' } },
+      properties: { campaign_id: { type: 'string', description: 'ID numérico da campanha (somente números)' } },
       required: ['campaign_id']
     }
   },
   {
-    name: 'relatorio_gastos',
+    name: 'relatorio_campanha',
     description: 'Mostra relatório de performance e gastos dos últimos 7 dias.',
     input_schema: { type: 'object', properties: {} }
   }
@@ -255,6 +274,11 @@ FLUXO DE CRIAÇÃO:
 2. Você coleta: orçamento diário, duração, texto do anúncio (se não fornecido, sugira um)
 3. Mostre resumo completo e pergunte "Confirma?"
 4. Só crie após confirmação
+
+TIPOS DE CAMPANHA:
+- Tráfego para WhatsApp → usar criar_campanha_whatsapp
+- Reconhecimento de marca → usar criar_campanha_awareness
+- Alcance máximo → usar criar_campanha_alcance
 
 BOAS PRÁTICAS PARA TEXTO DE ANÚNCIO:
 - Foque no problema do cliente, não no escritório
@@ -287,7 +311,7 @@ async function executarFerramenta(toolName, input) {
       return `Campanha \`${input.campaign_id}\` ativada com sucesso.`;
     }
 
-    if (toolName === 'relatorio_gastos') {
+    if (toolName === 'relatorio_campanha') {
       const dados = await relatorioCampanhas();
       if (!dados.length) return 'Nenhum gasto registrado nos últimos 7 dias.';
       let total = 0;
@@ -299,20 +323,27 @@ async function executarFerramenta(toolName, input) {
       return `*Últimos 7 dias:*\n\n${linhas.join('\n')}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
     }
 
-    if (toolName === 'criar_campanha_whatsapp' || toolName === 'criar_campanha_awareness') {
-      const objective = toolName === 'criar_campanha_whatsapp' ? 'OUTCOME_TRAFFIC' : 'OUTCOME_AWARENESS';
+    if (
+      toolName === 'criar_campanha_whatsapp' ||
+      toolName === 'criar_campanha_awareness' ||
+      toolName === 'criar_campanha_alcance'
+    ) {
+      let objective;
+      if (toolName === 'criar_campanha_whatsapp')  objective = 'OUTCOME_TRAFFIC';
+      else if (toolName === 'criar_campanha_awareness') objective = 'OUTCOME_AWARENESS';
+      else objective = 'OUTCOME_REACH';
 
-      const campaign  = await criarCampanha(input.nome_campanha, objective);
-      const adSet     = await criarConjunto({
-        campaignId:    campaign.id,
-        nome:          `${input.nome_campanha} — Conjunto`,
+      const campaign = await criarCampanha(input.nome_campanha, objective);
+      const adSet    = await criarConjunto({
+        campaignId:      campaign.id,
+        nome:            `${input.nome_campanha} — Conjunto`,
         orcamentoDiario: input.orcamento_diario,
-        diasDuracao:   input.duracao_dias,
-        idadeMin:      input.idade_min,
-        idadeMax:      input.idade_max,
+        diasDuracao:     input.duracao_dias,
+        idadeMin:        input.idade_min,
+        idadeMax:        input.idade_max,
         objective
       });
-      const creative  = await criarCriativo({
+      const creative = await criarCriativo({
         nome:      `${input.nome_campanha} — Criativo`,
         texto:     input.texto_anuncio,
         titulo:    input.titulo_anuncio,
@@ -320,8 +351,8 @@ async function executarFerramenta(toolName, input) {
         objective
       });
       const ad = await criarAnuncio({
-        nome:      `${input.nome_campanha} — Anúncio`,
-        adSetId:   adSet.id,
+        nome:       `${input.nome_campanha} — Anúncio`,
+        adSetId:    adSet.id,
         creativeId: creative.id
       });
 
@@ -346,51 +377,79 @@ async function executarFerramenta(toolName, input) {
 
 // ── Claude API ───────────────────────────────────────────────────────────────
 async function callClaude(userMessage, userId) {
-  if (!conversationHistory[userId]) conversationHistory[userId] = [];
-  conversationHistory[userId].push({ role: 'user', content: userMessage });
+  try {
+    if (!conversationHistory[userId]) conversationHistory[userId] = [];
+    conversationHistory[userId].push({ role: 'user', content: userMessage });
 
-  const messages = [...conversationHistory[userId]];
-  let response;
+    const messages = [...conversationHistory[userId]];
+    let response;
 
-  while (true) {
-    response = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: 'claude-opus-4-1',
-      max_tokens: 1024,
-      system: ADS_SYSTEM_PROMPT,
-      tools: ADS_TOOLS,
-      messages
-    }, {
-      headers: {
-        'x-api-key': CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json'
+    while (true) {
+      response = await axios.post('https://api.anthropic.com/v1/messages', {
+        model: 'claude-opus-4-5',
+        max_tokens: 1024,
+        system: ADS_SYSTEM_PROMPT,
+        tools: ADS_TOOLS,
+        messages
+      }, {
+        headers: {
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        }
+      });
+
+      const content   = response.data.content;
+      const toolBlock = content.find(b => b.type === 'tool_use');
+
+      if (!toolBlock) {
+        const text = content.find(b => b.type === 'text')?.text || '';
+        conversationHistory[userId].push({ role: 'assistant', content: text });
+        if (conversationHistory[userId].length > 40) {
+          conversationHistory[userId] = conversationHistory[userId].slice(-40);
+        }
+        saveHistory();
+        return text;
       }
-    });
 
-    const content = response.data.content;
-    const toolBlock = content.find(b => b.type === 'tool_use');
+      messages.push({ role: 'assistant', content });
+      conversationHistory[userId].push({ role: 'assistant', content });
 
-    if (!toolBlock) {
-      const text = content.find(b => b.type === 'text')?.text || '';
-      conversationHistory[userId].push({ role: 'assistant', content: text });
-      saveHistory();
-      return text;
+      const result    = await executarFerramenta(toolBlock.name, toolBlock.input);
+      const resultMsg = {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolBlock.id, content: result }]
+      };
+      messages.push(resultMsg);
+      conversationHistory[userId].push(resultMsg);
     }
-
-    messages.push({ role: 'assistant', content });
-    conversationHistory[userId].push({ role: 'assistant', content });
-
-    const result = await executarFerramenta(toolBlock.name, toolBlock.input);
-    const resultMsg = {
-      role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: toolBlock.id, content: result }]
-    };
-    messages.push(resultMsg);
-    conversationHistory[userId].push(resultMsg);
+  } catch (error) {
+    console.error('[AdsBot] Erro no Claude:', error.response?.data || error.message);
+    return 'Desculpe, ocorreu um erro técnico. Tente novamente em alguns instantes.';
   }
 }
 
 // ── WhatsApp ─────────────────────────────────────────────────────────────────
+async function markAsRead(messageId) {
+  if (!ADS_PHONE_NUMBER_ID || !ADS_WHATSAPP_TOKEN) return;
+  try {
+    await axios.post(`${META_API}/${ADS_PHONE_NUMBER_ID}/messages`, {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId
+    }, {
+      headers: { Authorization: `Bearer ${ADS_WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' }
+    });
+  } catch (e) {
+    console.error('[AdsBot] Erro ao marcar como lido:', e.response?.data);
+  }
+}
+
+function typingDelay(text) {
+  const delay = Math.min(Math.max(2000 + (text.length / 18) * 1000, 2000), 6000);
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
 async function sendWhatsApp(to, message) {
   if (!ADS_PHONE_NUMBER_ID || !ADS_WHATSAPP_TOKEN) {
     console.log(`[AdsBot] (sem WhatsApp configurado) Resposta: ${message}`);
@@ -402,16 +461,11 @@ async function sendWhatsApp(to, message) {
     type: 'text',
     text: { body: message }
   }, {
-    headers: {
-      Authorization: `Bearer ${ADS_WHATSAPP_TOKEN}`,
-      'Content-Type': 'application/json'
-    }
+    headers: { Authorization: `Bearer ${ADS_WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' }
   });
 }
 
 // ── Rotas ────────────────────────────────────────────────────────────────────
-
-// Webhook WhatsApp (segundo número)
 app.get('/ads-webhook', (req, res) => {
   if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === ADS_VERIFY_TOKEN) {
     return res.send(req.query['hub.challenge']);
@@ -426,7 +480,14 @@ app.post('/ads-webhook', async (req, res) => {
     if (!msgs?.length) return;
     const msg = msgs[0];
     if (msg.type !== 'text') return;
+
+    // Aceita mensagens somente do dono
+    if (msg.from !== OWNER_PHONE) return;
+
+    await markAsRead(msg.id);
+
     const reply = await callClaude(msg.text.body, msg.from);
+    await typingDelay(reply);
     await sendWhatsApp(msg.from, reply);
   } catch (e) {
     console.error('[AdsBot] Webhook erro:', e.message);
@@ -451,17 +512,17 @@ app.get('/ads-health', (req, res) => {
     status: 'OK',
     service: 'Meta Ads Agent — Assis e Xavier Advogados',
     config: {
-      META_ADS_TOKEN:    META_ADS_TOKEN    ? '*** (definido)' : 'NÃO DEFINIDO',
-      META_AD_ACCOUNT_ID: META_AD_ACCOUNT_ID || 'NÃO DEFINIDO',
-      META_PAGE_ID:      META_PAGE_ID      || 'NÃO DEFINIDO',
-      META_WHATSAPP_NUMBER
+      META_ADS_TOKEN:      META_ADS_TOKEN      ? '*** (definido)' : 'NÃO DEFINIDO',
+      META_AD_ACCOUNT_ID:  META_AD_ACCOUNT_ID  || 'NÃO DEFINIDO',
+      META_PAGE_ID:        META_PAGE_ID        || 'NÃO DEFINIDO',
+      META_WHATSAPP_NUMBER,
+      OWNER_PHONE
     }
   });
 });
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
 async function init() {
-  // Detecta e exibe conta(s) de anúncios disponíveis no token
   if (META_ADS_TOKEN && !META_AD_ACCOUNT_ID) {
     try {
       const res = await axios.get(`${META_API}/me/adaccounts`, {
@@ -470,7 +531,6 @@ async function init() {
       const accounts = res.data.data || [];
       console.log('[Meta Ads] Contas disponíveis no token:');
       accounts.forEach(a => console.log(`  • ${a.name} → ID: ${a.id} (status: ${a.account_status})`));
-      console.log('[Meta Ads] Defina META_AD_ACCOUNT_ID no .env com um dos IDs acima.');
     } catch (e) {
       console.error('[Meta Ads] Falha ao listar contas:', e.response?.data?.error?.message || e.message);
     }
