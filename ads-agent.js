@@ -842,11 +842,16 @@ app.post('/ads-webhook', async (req, res) => {
 
 // Endpoint REST para testes sem WhatsApp
 app.post('/ads-command', async (req, res) => {
-  const { message, userId = 'test-user' } = req.body;
+  const { message, userId = 'test-user', history } = req.body;
   if (!message) return res.status(400).json({ error: 'Informe "message"' });
   try {
+    // Restaura histórico enviado pelo cliente (sobrevive reinicializações do servidor)
+    if (Array.isArray(history) && history.length > 0) {
+      conversationHistory[userId] = history;
+    }
     const reply = await callClaude(message, userId);
-    res.json({ reply });
+    // Devolve histórico atualizado para o cliente salvar
+    res.json({ reply, history: conversationHistory[userId] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
