@@ -45,7 +45,7 @@ services:
       - key: META_ADS_TOKEN
         sync: false
       - key: INSTAGRAM_USER_ID
-        sync: false
+        value: "17841445732851392"
       - key: ADS_WHATSAPP_TOKEN
         sync: false
       - key: ADS_PHONE_NUMBER_ID
