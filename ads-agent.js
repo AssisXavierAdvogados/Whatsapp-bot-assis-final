@@ -287,6 +287,77 @@ async function buscarNoticiasConjur(tema) {
   return artigos.slice(0, 8);
 }
 
+async function buscarNoticiasSTJ(tema) {
+  const base = 'https://www.stj.jus.br';
+  const url  = tema
+    ? `${base}/sites/portalp/Paginas/Comunicacao/Noticias/Noticias.aspx?q=${encodeURIComponent(tema)}`
+    : `${base}/sites/portalp/Paginas/Comunicacao/Noticias/Noticias.aspx`;
+
+  const res = await axios.get(url, { headers: SCRAPER_HEADERS, timeout: 12000 });
+  const $   = cheerio.load(res.data);
+
+  const artigos = [];
+  $('a[href*="/Noticias/"], a[href*="/noticias/"]').each((_, el) => {
+    const href  = $(el).attr('href') || '';
+    const texto = $(el).text().trim();
+    if (texto.length > 20) {
+      const full = href.startsWith('http') ? href : `${base}${href}`;
+      if (!artigos.find(a => a.url === full)) {
+        artigos.push({ titulo: texto, url: full });
+      }
+    }
+  });
+
+  return artigos.slice(0, 8);
+}
+
+async function buscarNoticiasTJPR(tema) {
+  const base = 'https://www.tjpr.jus.br';
+  const url  = tema
+    ? `${base}/noticias?p_p_id=101&p_p_lifecycle=0&_101_keywords=${encodeURIComponent(tema)}`
+    : `${base}/noticias`;
+
+  const res = await axios.get(url, { headers: SCRAPER_HEADERS, timeout: 12000 });
+  const $   = cheerio.load(res.data);
+
+  const artigos = [];
+  $('a').each((_, el) => {
+    const href  = $(el).attr('href') || '';
+    const texto = $(el).text().trim();
+    if ((href.includes('/noticias/') || href.includes('-/-/')) && texto.length > 20) {
+      const full = href.startsWith('http') ? href : `${base}${href}`;
+      if (!artigos.find(a => a.url === full)) {
+        artigos.push({ titulo: texto, url: full });
+      }
+    }
+  });
+
+  return artigos.slice(0, 8);
+}
+
+async function buscarNoticiasJusBrasil(tema) {
+  const url = tema
+    ? `https://www.jusbrasil.com.br/noticias/busca?q=${encodeURIComponent(tema)}`
+    : 'https://www.jusbrasil.com.br/noticias/';
+
+  const res = await axios.get(url, { headers: SCRAPER_HEADERS, timeout: 12000 });
+  const $   = cheerio.load(res.data);
+
+  const artigos = [];
+  $('a').each((_, el) => {
+    const href  = $(el).attr('href') || '';
+    const texto = $(el).text().trim();
+    if (href.includes('/noticias/') && texto.length > 30) {
+      const full = href.startsWith('http') ? href : `https://www.jusbrasil.com.br${href}`;
+      if (!artigos.find(a => a.url === full)) {
+        artigos.push({ titulo: texto, url: full });
+      }
+    }
+  });
+
+  return artigos.slice(0, 8);
+}
+
 // ── Ferramentas para o Claude ─────────────────────────────────────────────────
 const ADS_TOOLS = [
   // ── Anúncios ─────────────────────────────────────────────────────────────
@@ -372,12 +443,16 @@ const ADS_TOOLS = [
   // ── Notícias ──────────────────────────────────────────────────────────────
   {
     name: 'buscar_noticias',
-    description: 'Busca as notícias jurídicas mais recentes do Migalhas e Conjur. Retorna lista com título e URL para o usuário escolher qual publicar.',
+    description: 'Busca notícias jurídicas recentes nos principais portais. Retorna lista com título e URL para o usuário escolher qual publicar.',
     input_schema: {
       type: 'object',
       properties: {
-        tema:  { type: 'string', description: 'Área jurídica para filtrar (ex: trabalhista, consumidor, família). Opcional.' },
-        fonte: { type: 'string', enum: ['migalhas', 'conjur', 'ambos'], description: 'Portal de origem. Padrão: ambos.' }
+        tema:  { type: 'string', description: 'Tema ou área jurídica para filtrar (ex: trabalhista, consumidor, família, previdenciário). Opcional.' },
+        fonte: {
+          type: 'string',
+          enum: ['migalhas', 'conjur', 'stj', 'tjpr', 'jusbrasil', 'todos'],
+          description: 'Portal de origem. Use "todos" para buscar em todas as fontes. Padrão: todos.'
+        }
       }
     }
   },
@@ -468,7 +543,22 @@ BOAS PRÁTICAS PARA TEXTO DE POST:
 TIPOS DE CAMPANHA:
 - Tráfego para WhatsApp → criar_campanha_whatsapp
 - Reconhecimento de marca → criar_campanha_awareness
-- Alcance máximo → criar_campanha_alcance`;
+- Alcance máximo → criar_campanha_alcance
+
+CRIAÇÃO DE CONTEÚDO COM IA (sem notícia):
+- Você pode criar posts jurídicos educativos com base no seu próprio conhecimento, sem precisar de URL
+- Use quando o usuário pedir: "cria um post sobre...", "faz uma publicação sobre...", "post educativo sobre..."
+- Exemplos de temas: direitos do consumidor, herança e inventário, aposentadoria por invalidez, demissão sem justa causa, guarda compartilhada, usucapião, revisão de financiamento, etc.
+- Gere o texto do post diretamente, mostre para o Dr. Willian e pergunte se quer publicar e em quais plataformas
+- Para publicar sem imagem no Instagram, informe que é necessário uma imagem e sugira que ele envie uma URL
+- Se ele fornecer uma URL de imagem, use-a; se não tiver, publique apenas no Facebook (que aceita só texto)
+
+FONTES DE NOTÍCIAS DISPONÍVEIS:
+- Migalhas — notícias jurídicas gerais
+- Conjur — notícias e jurisprudência
+- STJ — decisões do Superior Tribunal de Justiça
+- TJPR — decisões do Tribunal de Justiça do Paraná (local)
+- JusBrasil — maior portal jurídico do Brasil`;
 
 // ── Execução das ferramentas ──────────────────────────────────────────────────
 async function executarFerramenta(toolName, input) {
@@ -543,31 +633,32 @@ async function executarFerramenta(toolName, input) {
 
     // ── Notícias ────────────────────────────────────────────────────────────
     if (toolName === 'buscar_noticias') {
-      const { tema, fonte = 'ambos' } = input;
+      const { tema, fonte = 'todos' } = input;
       const resultados = [];
 
-      if (fonte === 'migalhas' || fonte === 'ambos') {
-        try {
-          const lista = await buscarNoticiasMigalhas(tema);
-          lista.forEach(a => resultados.push({ ...a, fonte: 'Migalhas' }));
-        } catch (e) {
-          console.error('[Scraper] Migalhas:', e.message);
+      const fontes = [
+        { key: 'migalhas',  fn: buscarNoticiasMigalhas,  nome: 'Migalhas'  },
+        { key: 'conjur',    fn: buscarNoticiasConjur,    nome: 'Conjur'    },
+        { key: 'stj',       fn: buscarNoticiasSTJ,       nome: 'STJ'       },
+        { key: 'tjpr',      fn: buscarNoticiasTJPR,      nome: 'TJPR'      },
+        { key: 'jusbrasil', fn: buscarNoticiasJusBrasil, nome: 'JusBrasil' },
+      ];
+
+      for (const f of fontes) {
+        if (fonte === 'todos' || fonte === f.key) {
+          try {
+            const lista = await f.fn(tema);
+            lista.forEach(a => resultados.push({ ...a, fonte: f.nome }));
+          } catch (e) {
+            console.error(`[Scraper] ${f.nome}:`, e.message);
+          }
         }
       }
 
-      if (fonte === 'conjur' || fonte === 'ambos') {
-        try {
-          const lista = await buscarNoticiasConjur(tema);
-          lista.forEach(a => resultados.push({ ...a, fonte: 'Conjur' }));
-        } catch (e) {
-          console.error('[Scraper] Conjur:', e.message);
-        }
-      }
-
-      if (!resultados.length) return 'Não encontrei notícias no momento. Tente fornecer uma URL diretamente.';
+      if (!resultados.length) return 'Não encontrei notícias no momento. Tente fornecer uma URL diretamente ou peça um post com base no meu conhecimento.';
 
       return resultados
-        .slice(0, 10)
+        .slice(0, 12)
         .map((a, i) => `${i + 1}. [${a.fonte}] ${a.titulo}\n   ${a.url}`)
         .join('\n\n');
     }
