@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agente de Marketing — Assis e Xavier</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #f0f2f5;
+      height: 100dvh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .chat-container {
+      width: 100%;
+      max-width: 780px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      box-shadow: 0 0 40px rgba(0,0,0,.12);
+    }
+
+    /* ── Header ── */
+    .header {
+      background: #1a2744;
+      color: #fff;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .header-avatar {
+      width: 42px; height: 42px;
+      background: #c9a84c;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; flex-shrink: 0;
+    }
+    .header-info h1 { font-size: 15px; font-weight: 600; }
+    .header-info p  { font-size: 11px; opacity: .65; margin-top: 1px; }
+    .header-dot {
+      width: 8px; height: 8px;
+      background: #4ade80;
+      border-radius: 50%;
+      margin-left: auto;
+      flex-shrink: 0;
+      box-shadow: 0 0 6px #4ade80;
+    }
+
+    /* ── Messages ── */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .welcome {
+      text-align: center;
+      color: #666;
+      font-size: 13px;
+      padding: 24px 16px 8px;
+    }
+    .welcome strong {
+      display: block;
+      color: #1a2744;
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+    .welcome p { line-height: 1.6; }
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 16px;
+    }
+    .chip {
+      background: #f4f4f0;
+      border: 1px solid #e0e0e0;
+      border-radius: 20px;
+      padding: 6px 13px;
+      font-size: 12px;
+      color: #1a2744;
+      cursor: pointer;
+      transition: all .18s;
+      user-select: none;
+    }
+    .chip:hover { background: #1a2744; color: #fff; border-color: #1a2744; }
+
+    /* ── Message bubbles ── */
+    .message {
+      display: flex;
+      gap: 8px;
+      max-width: 88%;
+      animation: fadeIn .2s ease;
+    }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; } }
+
+    .message.user  { align-self: flex-end;   flex-direction: row-reverse; }
+    .message.agent { align-self: flex-start; }
+
+    .msg-avatar {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; flex-shrink: 0; margin-top: 2px;
+    }
+    .message.agent .msg-avatar { background: #1a2744; color: #c9a84c; }
+    .message.user  .msg-avatar { background: #c9a84c; color: #fff; }
+
+    .msg-body { display: flex; flex-direction: column; gap: 3px; }
+    .message.user .msg-body { align-items: flex-end; }
+
+    .bubble {
+      padding: 9px 13px;
+      border-radius: 16px;
+      font-size: 13.5px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .message.agent .bubble {
+      background: #f0f2f5;
+      color: #111;
+      border-bottom-left-radius: 4px;
+    }
+    .message.user .bubble {
+      background: #1a2744;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .bubble strong { font-weight: 600; }
+    .bubble code {
+      background: rgba(0,0,0,.08);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .message.user .bubble code { background: rgba(255,255,255,.18); }
+    .bubble a { color: #c9a84c; }
+    .message.user .bubble a { color: #aed4f7; }
+
+    .msg-time { font-size: 10px; color: #aaa; }
+
+    /* ── Typing indicator ── */
+    .typing-bubble {
+      display: flex; gap: 5px; align-items: center;
+      padding: 10px 14px;
+    }
+    .typing-bubble span {
+      width: 7px; height: 7px;
+      background: #aaa;
+      border-radius: 50%;
+      animation: bounce 1.3s infinite;
+    }
+    .typing-bubble span:nth-child(2) { animation-delay: .2s; }
+    .typing-bubble span:nth-child(3) { animation-delay: .4s; }
+    @keyframes bounce {
+      0%,60%,100% { transform: translateY(0); }
+      30%          { transform: translateY(-7px); }
+    }
+
+    /* ── Input ── */
+    .input-area {
+      padding: 12px 14px;
+      border-top: 1px solid #e8e8e8;
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      flex-shrink: 0;
+      background: #fff;
+    }
+    textarea {
+      flex: 1;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 20px;
+      padding: 9px 15px;
+      font-size: 13.5px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      max-height: 110px;
+      min-height: 40px;
+      line-height: 1.5;
+      transition: border-color .2s;
+      color: #111;
+    }
+    textarea:focus { border-color: #1a2744; }
+    textarea::placeholder { color: #bbb; }
+
+    .send-btn {
+      width: 40px; height: 40px;
+      background: #1a2744;
+      border: none;
+      border-radius: 50%;
+      color: #fff;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .2s;
+      flex-shrink: 0;
+    }
+    .send-btn:hover:not(:disabled) { background: #c9a84c; }
+    .send-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+    /* ── Scrollbar ── */
+    .messages::-webkit-scrollbar { width: 4px; }
+    .messages::-webkit-scrollbar-thumb { background: #ddd; border-radius: 2px; }
+  </style>
+</head>
+<body>
+<div class="chat-container">
+
+  <div class="header">
+    <div class="header-avatar">⚖️</div>
+    <div class="header-info">
+      <h1>Agente de Marketing</h1>
+      <p>Assis e Xavier Advogados — Meta Ads · Facebook · Instagram</p>
+    </div>
+    <div class="header-dot" title="Online"></div>
+  </div>
+
+  <div class="messages" id="messages">
+    <div class="welcome">
+      <strong>Olá, Dr. Willian! 👋</strong>
+      <p>Posso criar campanhas de anúncios, buscar notícias jurídicas<br>e publicar no Facebook e Instagram do escritório.</p>
+      <div class="suggestions">
+        <span class="chip" onclick="quickSend('busca notícias trabalhistas')">📰 Notícias trabalhistas</span>
+        <span class="chip" onclick="quickSend('busca notícias de direito do consumidor')">📰 Notícias consumidor</span>
+        <span class="chip" onclick="quickSend('cria campanha de tráfego para WhatsApp, R$20/dia, 10 dias, área trabalhista')">📢 Nova campanha</span>
+        <span class="chip" onclick="quickSend('lista minhas campanhas')">📋 Listar campanhas</span>
+        <span class="chip" onclick="quickSend('relatório de gastos')">📊 Relatório</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <textarea
+      id="input"
+      placeholder="Digite um comando... (Enter para enviar, Shift+Enter para nova linha)"
+      rows="1"
+      onkeydown="handleKey(event)"
+      oninput="autoResize(this)"
+    ></textarea>
+    <button class="send-btn" id="sendBtn" onclick="send()" title="Enviar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"/>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+    </button>
+  </div>
+
+</div>
+
+<script>
+  const messagesEl = document.getElementById('messages');
+  const inputEl    = document.getElementById('input');
+  const sendBtn    = document.getElementById('sendBtn');
+
+  const sessionId  = localStorage.getItem('ads_session_id') || ('web_' + Math.random().toString(36).slice(2));
+  localStorage.setItem('ads_session_id', sessionId);
+
+  function fmt(text) {
+    return text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+      .replace(/\n/g, '<br>');
+  }
+
+  function now() {
+    return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function addMessage(text, role) {
+    const welcome = messagesEl.querySelector('.welcome');
+    if (welcome) welcome.remove();
+
+    const wrap = document.createElement('div');
+    wrap.className = `message ${role}`;
+    wrap.innerHTML = `
+      <div class="msg-avatar">${role === 'user' ? '👤' : '⚖️'}</div>
+      <div class="msg-body">
+        <div class="bubble">${fmt(text)}</div>
+        <div class="msg-time">${now()}</div>
+      </div>`;
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function showTyping() {
+    const wrap = document.createElement('div');
+    wrap.className = 'message agent';
+    wrap.id = 'typing-indicator';
+    wrap.innerHTML = `
+      <div class="msg-avatar">⚖️</div>
+      <div class="bubble typing-bubble"><span></span><span></span><span></span></div>`;
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function removeTyping() {
+    const t = document.getElementById('typing-indicator');
+    if (t) t.remove();
+  }
+
+  async function send(text) {
+    const msg = (text || inputEl.value).trim();
+    if (!msg || sendBtn.disabled) return;
+
+    inputEl.value = '';
+    autoResize(inputEl);
+    sendBtn.disabled = true;
+
+    addMessage(msg, 'user');
+    showTyping();
+
+    try {
+      const res  = await fetch('/ads-command', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ message: msg, userId: sessionId })
+      });
+      const data = await res.json();
+      removeTyping();
+      addMessage(data.reply || data.error || 'Sem resposta.', 'agent');
+    } catch {
+      removeTyping();
+      addMessage('Erro de conexão. Verifique e tente novamente.', 'agent');
+    }
+
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+
+  function quickSend(text) { send(text); }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  }
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 110) + 'px';
+  }
+</script>
+</body>
+</html>
