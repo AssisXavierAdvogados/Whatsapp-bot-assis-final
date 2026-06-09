@@ -720,6 +720,7 @@ app.get('/admin/conversations', (req, res) => {
 });
 
 
+app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Chatbot está funcionando!',
