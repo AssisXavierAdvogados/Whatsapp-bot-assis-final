@@ -590,7 +590,136 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => {
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+const ADMIN_HTML = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ana — Painel</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111b21;color:#e9edef;min-height:100vh}
+.screen{display:none}.screen.active{display:flex;flex-direction:column;min-height:100vh}
+#login{justify-content:center;align-items:center;padding:24px}
+.box{background:#202c33;border-radius:16px;padding:32px 24px;width:100%;max-width:360px}
+.box h1{font-size:24px;font-weight:700;margin-bottom:4px}.box p{color:#8696a0;font-size:14px;margin-bottom:24px}
+input[type=password]{width:100%;background:#2a3942;border:none;border-radius:8px;color:#e9edef;font-size:16px;padding:14px 16px;outline:none;margin-bottom:12px}
+button{width:100%;background:#00a884;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;padding:14px;cursor:pointer}
+button:active{opacity:.85}.err{color:#ef4444;font-size:13px;margin-top:8px;text-align:center}
+.hdr{background:#202c33;padding:16px 20px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}
+.hdr h2{font-size:17px;font-weight:600;flex:1}
+.back{font-size:26px;cursor:pointer;line-height:1}.ref{font-size:20px;cursor:pointer}
+.list{flex:1;overflow-y:auto}
+.item{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid #2a3942;cursor:pointer}
+.item:active{background:#2a3942}
+.av{width:46px;height:46px;border-radius:50%;background:#00a884;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
+.ci{flex:1;min-width:0}.cp{font-size:15px;font-weight:600}
+.cv{font-size:13px;color:#8696a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.cc{font-size:12px;color:#8696a0;flex-shrink:0}
+.empty{padding:48px 20px;text-align:center;color:#8696a0}
+.msgs{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:5px}
+.msg{max-width:82%;padding:8px 12px;border-radius:8px;font-size:14.5px;line-height:1.5;word-break:break-word}
+.msg.u{align-self:flex-end;background:#005c4b;border-radius:8px 0 8px 8px}
+.msg.a{align-self:flex-start;background:#202c33;border-radius:0 8px 8px 8px}
+.who{font-size:11px;font-weight:600;margin-bottom:3px;color:#8696a0}
+</style>
+</head>
+<body>
+<div id="login" class="screen active">
+  <div class="box">
+    <h1>Ana</h1>
+    <p>Painel de conversas — Assis e Xavier Advogados</p>
+    <input type="password" id="pwd" placeholder="Senha" onkeydown="if(event.key==='Enter')auth()">
+    <button onclick="auth()">Entrar</button>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+<div id="list" class="screen">
+  <div class="hdr">
+    <h2>Conversas</h2>
+    <span class="ref" onclick="load()" title="Atualizar">↻</span>
+  </div>
+  <div class="list" id="lst"></div>
+</div>
+<div id="chat" class="screen">
+  <div class="hdr">
+    <span class="back" onclick="show('list')">‹</span>
+    <h2 id="ctitle"></h2>
+  </div>
+  <div class="msgs" id="cmsgs"></div>
+</div>
+<script>
+let tk=localStorage.getItem('ana_tk')||'',convs={};
+async function auth(){
+  const p=document.getElementById('pwd').value;
+  const r=await fetch('/admin/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+  if(r.ok){const d=await r.json();tk=d.token;localStorage.setItem('ana_tk',tk);show('list');load();}
+  else document.getElementById('err').textContent='Senha incorreta.';
+}
+function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
+async function load(){
+  const r=await fetch('/admin/conversations',{headers:{'x-token':tk}});
+  if(r.status===401){localStorage.removeItem('ana_tk');show('login');return;}
+  convs=await r.json();render();
+}
+function render(){
+  const el=document.getElementById('lst'),keys=Object.keys(convs);
+  if(!keys.length){el.innerHTML='<div class="empty">Nenhuma conversa ainda.</div>';return;}
+  el.innerHTML=keys.map(ph=>{
+    const ms=convs[ph],last=ms[ms.length-1];
+    const prev=last?esc(last.text.substring(0,55)):'';
+    return \`<div class="item" onclick="openChat('\${ph}')">
+      <div class="av">\${ph.slice(-2)}</div>
+      <div class="ci"><div class="cp">+\${ph}</div><div class="cv">\${prev}</div></div>
+      <div class="cc">\${ms.length} msgs</div>
+    </div>\`;
+  }).join('');
+}
+function openChat(ph){
+  document.getElementById('ctitle').textContent='+'+ph;
+  const ms=convs[ph]||[],el=document.getElementById('cmsgs');
+  el.innerHTML=ms.map(m=>\`<div class="msg \${m.role==='user'?'u':'a'}">
+    <div class="who">\${m.role==='user'?'Cliente':'Ana'}</div>
+    \${esc(m.text)}
+  </div>\`).join('');
+  show('chat');
+  setTimeout(()=>el.scrollTop=el.scrollHeight,60);
+}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
+if(tk){show('list');load();}
+</script>
+</body>
+</html>`;
+
+app.get('/admin', (req, res) => res.send(ADMIN_HTML));
+
+app.post('/admin/auth', (req, res) => {
+  const { password } = req.body;
+  if (!ADMIN_PASSWORD || password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.json({ success: true, token: ADMIN_PASSWORD });
+});
+
+app.get('/admin/conversations', (req, res) => {
+  const token = req.headers['x-token'];
+  if (!ADMIN_PASSWORD || token !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const result = {};
+  for (const [phone, msgs] of Object.entries(conversationHistory)) {
+    const textMsgs = msgs.filter(m => typeof m.content === 'string' && m.content.trim());
+    if (textMsgs.length > 0) {
+      result[phone] = textMsgs.map(m => ({ role: m.role, text: m.content }));
+    }
+  }
+  res.json(result);
+});
+
+
   res.status(200).json({
     status: 'OK',
     message: 'Chatbot está funcionando!',
