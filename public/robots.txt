@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /webhook
+Disallow: /health
+
+Sitemap: https://assisxavier.com.br/sitemap.xml
