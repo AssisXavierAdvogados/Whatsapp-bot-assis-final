@@ -83,9 +83,53 @@ async function criarCampanha(nome, objective) {
   });
 }
 
-async function criarConjunto({ campaignId, nome, orcamentoDiario, diasDuracao, idadeMin, idadeMax, objective }) {
+// Resolve localização para o formato geo_locations da Meta API
+async function resolverLocalizacao(localizacao) {
+  const loc = (localizacao || '').toLowerCase().trim();
+
+  // Padrão: Maringá e região
+  if (!loc || loc.includes('maringá') || loc.includes('maringa') || loc.includes('maringá/pr')) {
+    return {
+      custom_locations: [{
+        latitude: MARINGA_LAT, longitude: MARINGA_LNG,
+        radius: DEFAULT_RADIUS_KM, distance_unit: 'kilometer'
+      }]
+    };
+  }
+
+  // Busca na Meta API (estados, cidades)
+  try {
+    const res = await metaGet('search', {
+      type: 'adgeolocation',
+      q: localizacao,
+      location_types: JSON.stringify(['region', 'city']),
+      country_code: 'BR'
+    });
+    const match = (res.data || [])[0];
+    if (!match) throw new Error('Localização não encontrada');
+
+    if (match.type === 'region') {
+      return { regions: [{ key: match.key, country: 'BR' }] };
+    }
+    return {
+      cities: [{ key: match.key, country: 'BR', radius: 30, distance_unit: 'kilometer' }]
+    };
+  } catch (e) {
+    console.error('[Geo] Fallback para Maringá:', e.message);
+    return {
+      custom_locations: [{
+        latitude: MARINGA_LAT, longitude: MARINGA_LNG,
+        radius: DEFAULT_RADIUS_KM, distance_unit: 'kilometer'
+      }]
+    };
+  }
+}
+
+async function criarConjunto({ campaignId, nome, orcamentoDiario, diasDuracao, idadeMin, idadeMax, objective, localizacao, urlDestino }) {
   const start = new Date();
   const end   = new Date(start.getTime() + diasDuracao * 86400000);
+
+  const geoLocations = await resolverLocalizacao(localizacao);
 
   const body = {
     name:             nome,
@@ -99,20 +143,15 @@ async function criarConjunto({ campaignId, nome, orcamentoDiario, diasDuracao, i
     targeting: {
       age_min: idadeMin || 25,
       age_max: idadeMax || 60,
-      geo_locations: {
-        custom_locations: [{
-          latitude:      MARINGA_LAT,
-          longitude:     MARINGA_LNG,
-          radius:        DEFAULT_RADIUS_KM,
-          distance_unit: 'kilometer'
-        }]
-      }
+      geo_locations: geoLocations
     }
   };
 
-  if (objective === 'OUTCOME_TRAFFIC') {
+  if (objective === 'OUTCOME_TRAFFIC' && urlDestino) {
+    body.optimization_goal = 'LINK_CLICKS';               // campanha para site
+  } else if (objective === 'OUTCOME_TRAFFIC') {
     body.destination_type  = 'WHATSAPP';
-    body.optimization_goal = 'LINK_CLICKS';
+    body.optimization_goal = 'LINK_CLICKS';               // campanha para WhatsApp
   } else if (objective === 'OUTCOME_AWARENESS') {
     body.optimization_goal = 'AD_RECALL_LIFT';
   } else {
@@ -122,21 +161,27 @@ async function criarConjunto({ campaignId, nome, orcamentoDiario, diasDuracao, i
   return metaPost(`${META_AD_ACCOUNT_ID}/adsets`, body);
 }
 
-async function criarCriativo({ nome, texto, titulo, urlImagem, objective }) {
+async function criarCriativo({ nome, texto, titulo, urlImagem, objective, urlDestino }) {
   const waLink = `https://api.whatsapp.com/send?phone=${META_WHATSAPP_NUMBER.replace(/\D/g, '')}&text=Ol%C3%A1%2C%20vim%20pelo%20an%C3%BAncio`;
+
+  const destino = urlDestino || (objective === 'OUTCOME_TRAFFIC' ? waLink : `https://www.facebook.com/${META_PAGE_ID}`);
 
   const linkData = {
     message:     texto,
     name:        titulo,
     description: 'Assis e Xavier Advogados — Maringá, PR',
-    link:        objective === 'OUTCOME_TRAFFIC' ? waLink : `https://www.facebook.com/${META_PAGE_ID}`
+    link:        destino
   };
 
   if (urlImagem) linkData.picture = urlImagem;
 
-  linkData.call_to_action = objective === 'OUTCOME_TRAFFIC'
-    ? { type: 'WHATSAPP_MESSAGE', value: { app_destination: 'WHATSAPP', link: waLink } }
-    : { type: 'LEARN_MORE' };
+  if (objective === 'OUTCOME_TRAFFIC' && !urlDestino) {
+    linkData.call_to_action = { type: 'WHATSAPP_MESSAGE', value: { app_destination: 'WHATSAPP', link: waLink } };
+  } else if (urlDestino) {
+    linkData.call_to_action = { type: 'LEARN_MORE' };
+  } else {
+    linkData.call_to_action = { type: 'LEARN_MORE' };
+  }
 
   return metaPost(`${META_AD_ACCOUNT_ID}/adcreatives`, {
     name: nome,
@@ -374,7 +419,8 @@ const ADS_TOOLS = [
         titulo_anuncio:   { type: 'string' },
         url_imagem:       { type: 'string' },
         idade_min:        { type: 'number' },
-        idade_max:        { type: 'number' }
+        idade_max:        { type: 'number' },
+        localizacao:      { type: 'string', description: 'Estado, cidade ou região. Ex: "Santa Catarina", "São Paulo", "Curitiba". Padrão: Maringá e região.' }
       },
       required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio']
     }
@@ -390,7 +436,8 @@ const ADS_TOOLS = [
         duracao_dias:     { type: 'number' },
         texto_anuncio:    { type: 'string' },
         titulo_anuncio:   { type: 'string' },
-        url_imagem:       { type: 'string' }
+        url_imagem:       { type: 'string' },
+        localizacao:      { type: 'string', description: 'Estado, cidade ou região. Ex: "Santa Catarina", "São Paulo". Padrão: Maringá e região.' }
       },
       required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio']
     }
@@ -406,9 +453,30 @@ const ADS_TOOLS = [
         duracao_dias:     { type: 'number' },
         texto_anuncio:    { type: 'string' },
         titulo_anuncio:   { type: 'string' },
-        url_imagem:       { type: 'string' }
+        url_imagem:       { type: 'string' },
+        localizacao:      { type: 'string', description: 'Estado, cidade ou região. Ex: "Santa Catarina", "São Paulo". Padrão: Maringá e região.' }
       },
       required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio']
+    }
+  },
+  {
+    name: 'criar_campanha_site',
+    description: 'Cria campanha de tráfego para um site/URL específico no Meta Ads. Use quando o usuário quiser direcionar cliques para uma página web.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome_campanha:    { type: 'string' },
+        orcamento_diario: { type: 'number', description: 'Em R$' },
+        duracao_dias:     { type: 'number' },
+        texto_anuncio:    { type: 'string', description: 'Até 125 caracteres' },
+        titulo_anuncio:   { type: 'string' },
+        url_destino:      { type: 'string', description: 'URL do site para onde os cliques serão direcionados' },
+        url_imagem:       { type: 'string' },
+        idade_min:        { type: 'number' },
+        idade_max:        { type: 'number' },
+        localizacao:      { type: 'string', description: 'Estado, cidade ou região. Ex: "Santa Catarina", "São Paulo". Padrão: Maringá e região.' }
+      },
+      required: ['nome_campanha', 'orcamento_diario', 'duracao_dias', 'texto_anuncio', 'titulo_anuncio', 'url_destino']
     }
   },
   {
@@ -579,6 +647,13 @@ TIPOS DE CAMPANHA:
 - Tráfego para WhatsApp → criar_campanha_whatsapp
 - Reconhecimento de marca → criar_campanha_awareness
 - Alcance máximo → criar_campanha_alcance
+- Tráfego para site/URL → criar_campanha_site (use quando o usuário fornecer uma URL de destino)
+
+LOCALIZAÇÃO DE CAMPANHAS:
+- Padrão: Maringá e 30 km ao redor
+- Aceita qualquer estado, cidade ou região do Brasil
+- Exemplos: "Santa Catarina", "São Paulo", "Curitiba", "interior do Paraná"
+- Se o usuário mencionar um local diferente de Maringá, passe no campo localizacao
 
 FONTES DE NOTÍCIAS:
 - Migalhas, Conjur, STJ, TJPR, JusBrasil`;
@@ -616,10 +691,13 @@ async function executarFerramenta(toolName, input) {
       return `*Últimos 7 dias:*\n\n${linhas.join('\n')}\n\n💰 *Total: R$ ${total.toFixed(2)}*`;
     }
 
-    if (['criar_campanha_whatsapp', 'criar_campanha_awareness', 'criar_campanha_alcance'].includes(toolName)) {
+    if (['criar_campanha_whatsapp', 'criar_campanha_awareness', 'criar_campanha_alcance', 'criar_campanha_site'].includes(toolName)) {
       const objective =
         toolName === 'criar_campanha_whatsapp'  ? 'OUTCOME_TRAFFIC'   :
-        toolName === 'criar_campanha_awareness' ? 'OUTCOME_AWARENESS' : 'OUTCOME_REACH';
+        toolName === 'criar_campanha_awareness' ? 'OUTCOME_AWARENESS' :
+        toolName === 'criar_campanha_site'      ? 'OUTCOME_TRAFFIC'   : 'OUTCOME_REACH';
+
+      const urlDestino = toolName === 'criar_campanha_site' ? input.url_destino : undefined;
 
       const campaign  = await criarCampanha(input.nome_campanha, objective);
       const adSet     = await criarConjunto({
@@ -629,14 +707,17 @@ async function executarFerramenta(toolName, input) {
         diasDuracao:     input.duracao_dias,
         idadeMin:        input.idade_min,
         idadeMax:        input.idade_max,
-        objective
+        objective,
+        localizacao:     input.localizacao,
+        urlDestino
       });
       const creative  = await criarCriativo({
         nome:      `${input.nome_campanha} — Criativo`,
         texto:     input.texto_anuncio,
         titulo:    input.titulo_anuncio,
         urlImagem: input.url_imagem || null,
-        objective
+        objective,
+        urlDestino
       });
       const ad = await criarAnuncio({
         nome:       `${input.nome_campanha} — Anúncio`,
@@ -747,7 +828,7 @@ async function callClaude(userMessage, userId) {
 
     while (true) {
       response = await axios.post('https://api.anthropic.com/v1/messages', {
-        model:      'claude-opus-4-5',
+        model:      'claude-sonnet-4-6',
         max_tokens: 1024,
         system:     ADS_SYSTEM_PROMPT,
         tools:      ADS_TOOLS,
