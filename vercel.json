@@ -4,5 +4,22 @@
   "buildCommand": "true",
   "outputDirectory": "public",
   "cleanUrls": true,
-  "trailingSlash": false
+  "trailingSlash": false,
+  "rewrites": [
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "busca.assisxavier.com.br" }],
+      "destination": "/busca"
+    },
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "familia.assisxavier.com.br" }],
+      "destination": "/familia"
+    },
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "trabalhista.assisxavier.com.br" }],
+      "destination": "/trabalhista"
+    }
+  ]
 }
