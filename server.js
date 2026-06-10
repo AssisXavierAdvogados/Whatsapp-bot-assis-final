@@ -740,4 +740,15 @@ app.listen(PORT, () => {
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
   console.log(`Webhook: GET|POST /webhook`);
+
+  // Ping a cada 10 minutos para evitar que o Render durma
+  const SERVICE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  setInterval(async () => {
+    try {
+      await axios.get(`${SERVICE_URL}/health`);
+      console.log('[Ping] Servidor ativo');
+    } catch (e) {
+      console.log('[Ping] Falha no ping:', e.message);
+    }
+  }, 10 * 60 * 1000);
 });
