@@ -866,8 +866,13 @@ async function callClaude(userMessage, userId) {
       conversationHistory[userId].push(resultMsg);
     }
   } catch (error) {
+    const detail =
+      error.response?.data?.error?.message ||
+      error.response?.data?.error?.type ||
+      error.message ||
+      'desconhecido';
     console.error('[Claude] Erro:', error.response?.data || error.message);
-    return 'Desculpe, ocorreu um erro técnico. Tente novamente em instantes.';
+    return `⚠️ Erro técnico: ${detail}`;
   }
 }
 
@@ -936,6 +941,33 @@ app.post('/ads-command', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Diagnóstico: testa a API do Claude isoladamente (modelo + chave + tools)
+app.get('/ads-diag', async (req, res) => {
+  const out = { model: 'claude-sonnet-4-6', steps: {} };
+  // 1) Chamada mínima sem tools
+  try {
+    const r = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-sonnet-4-6', max_tokens: 32,
+      messages: [{ role: 'user', content: 'responda apenas: ok' }]
+    }, { headers: { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
+    out.steps.claude_sem_tools = '✅ ' + (r.data.content?.[0]?.text || 'ok');
+  } catch (e) {
+    out.steps.claude_sem_tools = '❌ ' + (e.response?.data?.error?.message || e.message);
+  }
+  // 2) Chamada com as tools + system prompt completos
+  try {
+    const r = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-sonnet-4-6', max_tokens: 64,
+      system: ADS_SYSTEM_PROMPT, tools: ADS_TOOLS,
+      messages: [{ role: 'user', content: 'oi' }]
+    }, { headers: { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
+    out.steps.claude_com_tools = '✅ resposta recebida';
+  } catch (e) {
+    out.steps.claude_com_tools = '❌ ' + (e.response?.data?.error?.message || e.message);
+  }
+  res.json(out);
 });
 
 app.get('/ads-health', (req, res) => {
