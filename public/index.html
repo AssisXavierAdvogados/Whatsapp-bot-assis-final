@@ -302,6 +302,53 @@
     .area-link:hover { gap: 12px; color: var(--gold-light); }
     .area-link-arrow { font-size: 1.1rem; }
 
+    /* TEAM */
+    #equipe {
+      padding: 96px 0;
+      background: var(--white);
+    }
+    .team-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 40px;
+      max-width: 840px;
+      margin: 0 auto;
+    }
+    .team-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .team-photo-wrap {
+      width: 220px;
+      height: 260px;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      border: 3px solid rgba(184,150,62,.25);
+      box-shadow: var(--shadow-lg);
+      margin-bottom: 20px;
+    }
+    .team-photo-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: top center;
+    }
+    .team-name {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-dark);
+      margin-bottom: 4px;
+    }
+    .team-oab {
+      font-size: .875rem;
+      color: var(--gold);
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+
     /* CTA */
     #cta {
       background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy-light) 100%);
@@ -496,6 +543,32 @@
         </a>
       </article>
 
+    </div>
+  </div>
+</section>
+
+<!-- EQUIPE -->
+<section id="equipe">
+  <div class="container">
+    <p class="section-label">Quem somos</p>
+    <h2 class="section-title">Nossa equipe</h2>
+    <div class="divider" aria-hidden="true"></div>
+
+    <div class="team-grid">
+      <div class="team-card">
+        <div class="team-photo-wrap">
+          <img src="/willian.jpg" alt="Dr. Willian Assis" loading="lazy">
+        </div>
+        <p class="team-name">Dr. Willian Assis</p>
+        <p class="team-oab">OAB/PR 111.343</p>
+      </div>
+      <div class="team-card">
+        <div class="team-photo-wrap">
+          <img src="/aline.jpg" alt="Dra. Aline Xavier" loading="lazy">
+        </div>
+        <p class="team-name">Dra. Aline Xavier</p>
+        <p class="team-oab">OAB/PR 105.987</p>
+      </div>
     </div>
   </div>
 </section>
