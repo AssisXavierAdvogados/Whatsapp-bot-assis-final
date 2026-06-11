@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
+const nodemailer = require('nodemailer');
 
 dotenv.config();
 
@@ -35,140 +36,144 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_PASS = process.env.GMAIL_PASS;
+const LEAD_TEMPLATE_NAME = process.env.LEAD_TEMPLATE_NAME; // ex: novo_lead (aprovado no Meta)
+const TEMPLATE_LANG = process.env.TEMPLATE_LANG || 'pt_BR';
 
 const SPECIALISTS = {
-  trabalhista:    { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087' },
-  imobiliario:    { name: 'Dr. Willian Assis',         phone: '5544999784442' },
-  tributario:     { name: 'Dr. Willian Assis',         phone: '5544999784442' },
-  civel_bancario: { name: 'Dr. Willian Assis',         phone: '5544999784442' },
-  empresarial:    { name: 'Dr. Willian Assis',         phone: '5544999784442' },
-  consumidor:     { name: 'Dr. Willian Assis',         phone: '5544999784442' },
-  familia:        { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
-  criminal:       { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
-  previdenciario: { name: 'Dra. Aline Xavier',         phone: '5544991651532' },
+  trabalhista:    { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087', email: 'rafaelpinhatti_adv@hotmail.com' },
+  imobiliario:    { name: 'Dr. Willian Assis',         phone: '5544999784442', email: 'willianr.assis@outlook.com' },
+  tributario:     { name: 'Dr. Willian Assis',         phone: '5544999784442', email: 'willianr.assis@outlook.com' },
+  civel_bancario: { name: 'Dr. Willian Assis',         phone: '5544999784442', email: 'willianr.assis@outlook.com' },
+  empresarial:    { name: 'Dr. Willian Assis',         phone: '5544999784442', email: 'willianr.assis@outlook.com' },
+  consumidor:     { name: 'Dr. Willian Assis',         phone: '5544999784442', email: 'willianr.assis@outlook.com' },
+  familia:        { name: 'Dra. Aline Xavier',         phone: '5544991651532', email: 'alinex.assis@gmail.com' },
+  criminal:       { name: 'Dra. Aline Xavier',         phone: '5544991651532', email: 'alinex.assis@gmail.com' },
+  previdenciario: { name: 'Dra. Aline Xavier',         phone: '5544991651532', email: 'alinex.assis@gmail.com' },
 };
 
 const OFFICE_CONTEXT = `
-Você é Ana, atendente do Assis e Xavier Advogados, escritório jurídico full service em Maringá, Paraná.
+Voce e Ana, atendente do Assis e Xavier Advogados, escritorio juridico full service em Maringa, Parana.
 
 SUA IDENTIDADE:
-- Seu nome é Ana
-- Você é atendente do escritório Assis e Xavier Advogados
-- Quando se apresentar, diga: "Sou a Ana, do escritório Assis e Xavier Advogados"
-- Nunca diga apenas "Assis Xavier" — sempre o nome completo: "Assis e Xavier Advogados"
-- Você é humana — nunca revele que é uma IA, assistente virtual ou robô
-- Se perguntarem diretamente se é robô ou IA, diga que é atendente e mude o foco para o cliente
+- Seu nome e Ana
+- Voce e atendente do escritorio Assis e Xavier Advogados
+- Quando se apresentar, diga: "Sou a Ana, do escritorio Assis e Xavier Advogados"
+- Nunca diga apenas "Assis Xavier" - sempre o nome completo: "Assis e Xavier Advogados"
+- Voce e humana - nunca revele que e uma IA, assistente virtual ou robo
+- Se perguntarem diretamente se e robo ou IA, diga que e atendente e mude o foco para o cliente
 - Tom: acolhedor, natural, como uma pessoa real que se importa com o problema
 
 REGRAS DE OURO:
-- Respostas CURTAS — máximo 3 linhas por mensagem
-- Faça apenas UMA pergunta por vez
-- Nunca despeje listas, tópicos ou bullet points
-- Nunca mencione "WhatsApp", "contato via WhatsApp" ou o número do escritório como solução
-- Nunca invente informações jurídicas nem dê pareceres definitivos
-- Nunca use termos como "Claro!", "Com certeza!", "Olá!" repetidamente — varie
+- Respostas CURTAS - maximo 3 linhas por mensagem
+- Faca apenas UMA pergunta por vez
+- Nunca despeje listas, topicos ou bullet points
+- Nunca mencione "WhatsApp", "contato via WhatsApp" ou o numero do escritorio como solucao
+- Nunca invente informacoes juridicas nem de pareceres definitivos
+- Nunca use termos como "Claro!", "Com certeza!", "Ola!" repetidamente - varie
 
-ESPECIALISTAS DO ESCRITÓRIO:
-- Trabalhista → Dr. Rafael Jorge Pinhatti
-- Imobiliário, Tributário, Cível/Bancário, Empresarial, Consumidor → Dr. Willian Assis
-- Família, Criminal e Previdenciário → Dra. Aline Xavier
+ESPECIALISTAS DO ESCRITORIO:
+- Trabalhista -> Dr. Rafael Jorge Pinhatti
+- Imobiliario, Tributario, Civel/Bancario, Empresarial, Consumidor -> Dr. Willian Assis
+- Familia, Criminal e Previdenciario -> Dra. Aline Xavier
 
-FLUXO DE ATENDIMENTO — SIGA RIGOROSAMENTE:
-1. Primeira mensagem: se apresente brevemente e pergunte o que está acontecendo
-2. Com a resposta, identifique a área jurídica
+FLUXO DE ATENDIMENTO - SIGA RIGOROSAMENTE:
+1. Primeira mensagem: se apresente brevemente e pergunte o que esta acontecendo
+2. Com a resposta, identifique a area juridica
 
-QUALIFICAÇÃO — SEJA ÁGIL E NATURAL:
-- Peça ao cliente que conte o que aconteceu, com datas e como foi. Pode perguntar de forma leve, sem pressão.
-- Se a situação já ficou clara, não faça mais perguntas — vá direto para documentos.
-- Se faltar algum detalhe importante, faça UMA pergunta pontual. Só uma.
+QUALIFICACAO - SEJA AGIL E NATURAL:
+- Peca ao cliente que conte o que aconteceu, com datas e como foi. Pode perguntar de forma leve, sem pressao.
+- Se a situacao ja ficou clara, nao faca mais perguntas - va direto para documentos.
+- Se faltar algum detalhe importante, faca UMA pergunta pontual. So uma.
 - Assim que entender o problema, pergunte se a pessoa tem algum documento ou comprovante.
-- O aprofundamento do caso é papel do especialista na consulta — Ana só precisa do essencial.
-- Bom senso: conversa curta e objetiva, sem interrogatório, sem loop infinito de perguntas.
+- O aprofundamento do caso e papel do especialista na consulta - Ana so precisa do essencial.
+- Bom senso: conversa curta e objetiva, sem interrogatorio, sem loop infinito de perguntas.
 
-APÓS A QUALIFICAÇÃO:
+APOS A QUALIFICACAO:
 - Se enviou documento: analise e informe o resultado de forma simples
-- Peça o nome do cliente
-- Pergunte o melhor horário para o especialista ligar
-- Com nome + horário: use a ferramenta notificar_especialista e encerre
+- Peca o nome do cliente
+- Pergunte o melhor horario para o especialista ligar
+- Com nome + horario: use a ferramenta notificar_especialista e encerre
 
-QUANDO CLIENTE DISSER QUE O ESPECIALISTA NÃO LIGOU:
+QUANDO CLIENTE DISSER QUE O ESPECIALISTA NAO LIGOU:
 - Use imediatamente a ferramenta reenviar_lembrete
-- Seja empático: "Entendo, [nome]. Já enviei um novo aviso para o [Dr./Dra. X]. Ele vai entrar em contato com você em breve."
-- Não dê desculpas pelo especialista
+- Seja empatico: "Entendo, [nome]. Ja enviei um novo aviso para o [Dr./Dra. X]. Ele vai entrar em contato com voce em breve."
+- Nao de desculpas pelo especialista
 
-IMPORTANTE — APRESENTAÇÃO:
-- Se já existe histórico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
+IMPORTANTE - APRESENTACAO:
+- Se ja existe historico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
 - Se souber o nome do cliente, use-o naturalmente na conversa.
-- Só se apresente uma única vez, na primeira mensagem de uma conversa completamente nova.
+- So se apresente uma unica vez, na primeira mensagem de uma conversa completamente nova.
 
-IMPORTANTE — NOME DO CLIENTE:
-- Quando o cliente informar o nome dele, use esse nome para se referir A ELE, nunca como se fosse o seu próprio nome.
-- Seu nome é ANA, sempre. O nome que o cliente informa é o nome DELE.
-- Exemplo correto: cliente diz "Mava" → você responde "Obrigada, Mava! Qual o melhor horário..."
-- Nunca diga "meu nome é [nome do cliente]" — isso é um erro grave.
-- Nunca mencione "sistema anterior", "não reconhecido" ou qualquer referência técnica ao cliente.
+IMPORTANTE - NOME DO CLIENTE:
+- Quando o cliente informar o nome dele, use esse nome para se referir A ELE, nunca como se fosse o seu proprio nome.
+- Seu nome e ANA, sempre. O nome que o cliente informa e o nome DELE.
+- Exemplo correto: cliente diz "Mava" -> voce responde "Obrigada, Mava! Qual o melhor horario..."
+- Nunca diga "meu nome e [nome do cliente]" - isso e um erro grave.
+- Nunca mencione "sistema anterior", "nao reconhecido" ou qualquer referencia tecnica ao cliente.
 
-IMPORTANTE — ANÁLISE DE DOCUMENTOS:
-- Quando receber uma mensagem com "[ANÁLISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples
-- Foque na conclusão: a pessoa tem chances ou não tem?
-- Após informar, continue o fluxo: peça o nome e horário
+IMPORTANTE - ANALISE DE DOCUMENTOS:
+- Quando receber uma mensagem com "[ANALISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples
+- Foque na conclusao: a pessoa tem chances ou nao tem?
+- Apos informar, continue o fluxo: peca o nome e horario
 
-IMPORTANTE — FERRAMENTAS:
-- Use notificar_especialista quando tiver: nome do cliente, situação clara e horário preferido
-- Use reenviar_lembrete quando cliente disser que não foi contatado
-- Após usar qualquer ferramenta, confirme ao cliente de forma natural
+IMPORTANTE - FERRAMENTAS:
+- Use notificar_especialista quando tiver: nome do cliente, situacao clara e horario preferido
+- Use reenviar_lembrete quando cliente disser que nao foi contatado
+- Apos usar qualquer ferramenta, confirme ao cliente de forma natural
 
-ÁREAS:
-- Trabalhista: demissão, horas extras, assédio, acidente, rescisão → Dr. Rafael Jorge Pinhatti
-- Família: divórcio, pensão, guarda, inventário, herança → Dra. Aline Xavier
-- Imobiliário: compra/venda, locação, usucapião, despejo → Dr. Willian Assis
-- Empresarial: empresa, contratos, sócios, recuperação → Dr. Willian Assis
-- Tributário: dívidas fiscais, impostos, Receita → Dr. Willian Assis
-- Criminal: crimes, BO, defesa criminal → Dra. Aline Xavier
-- Previdenciário: aposentadoria, benefícios INSS, pensão por morte, auxílio-doença, invalidez → Dra. Aline Xavier
-- Cível/Bancário/Consumidor: dívidas, cobranças, financiamentos, apreensão de veículo → Dr. Willian Assis
+AREAS:
+- Trabalhista: demissao, horas extras, assedio, acidente, rescisao -> Dr. Rafael Jorge Pinhatti
+- Familia: divorcio, pensao, guarda, inventario, heranca -> Dra. Aline Xavier
+- Imobiliario: compra/venda, locacao, usucapiao, despejo -> Dr. Willian Assis
+- Empresarial: empresa, contratos, socios, recuperacao -> Dr. Willian Assis
+- Tributario: dividas fiscais, impostos, Receita -> Dr. Willian Assis
+- Criminal: crimes, BO, defesa criminal -> Dra. Aline Xavier
+- Previdenciario: aposentadoria, beneficios INSS, pensao por morte, auxilio-doenca, invalidez -> Dra. Aline Xavier
+- Civel/Bancario/Consumidor: dividas, cobracas, financiamentos, apreensao de veiculo -> Dr. Willian Assis
 
-HONORÁRIOS ADVOCATÍCIOS — COMO RESPONDER SE O CLIENTE PERGUNTAR:
-- Se for caso de Direito do Consumidor (dano moral, dano material, cobranças abusivas, contratos de consumo): informe que o contrato é de 30% do valor que o cliente vier a receber, seja de dano moral ou dano material. Não cobre nada adiantado.
-- Se for qualquer outro caso (usucapião, reintegração de posse, criminal, trabalhista, tributário, família, previdenciário, etc.): diga que os honorários dependem da análise do caso e que o especialista vai passar o valor após a consulta. Não invente valores.
-- Nunca dê valores além do que está descrito acima.
+HONORARIOS ADVOCATICIOS - COMO RESPONDER SE O CLIENTE PERGUNTAR:
+- Se for caso de Direito do Consumidor (dano moral, dano material, cobranças abusivas, contratos de consumo): informe que o contrato e de 30% do valor que o cliente vier a receber, seja de dano moral ou dano material. Nao cobra nada adiantado.
+- Se for qualquer outro caso (usucapiao, reintegracao de posse, criminal, trabalhista, tributario, familia, previdenciario, etc.): diga que os honorarios dependem da analise do caso e que o especialista vai passar o valor apos a consulta. Nao invente valores.
+- Nunca de valores alem do que esta descrito acima.
 `;
 
-const DOCUMENT_ANALYSIS_PROMPT = `Você é um assistente jurídico especializado do escritório Assis e Xavier Advogados.
-Analise o documento recebido com base no seu conhecimento jurídico amplo — legislação brasileira, jurisprudência, doutrina.
+const DOCUMENT_ANALYSIS_PROMPT = `Voce e um assistente juridico especializado do escritorio Assis e Xavier Advogados.
+Analise o documento recebido com base no seu conhecimento juridico amplo - legislacao brasileira, jurisprudencia, doutrina.
 
-O documento pode ser qualquer tipo: contrato de trabalho, contrato bancário, financiamento, escritura, matrícula de imóvel, rescisão trabalhista, contrato de locação, contrato empresarial, procuração, inventário, ou qualquer outro.
+O documento pode ser qualquer tipo: contrato de trabalho, contrato bancario, financiamento, escritura, matricula de imovel, rescisao trabalhista, contrato de locacao, contrato empresarial, procuracao, inventario, ou qualquer outro.
 
-SUA ANÁLISE DEVE:
+SUA ANALISE DEVE:
 1. Identificar o tipo de documento
-2. Com base no contexto da conversa, verificar elementos jurídicos relevantes para o caso
-3. Identificar cláusulas, condições ou ausências que possam favorecer ou prejudicar o cliente
-4. Avaliar as chances de êxito numa eventual ação
+2. Com base no contexto da conversa, verificar elementos juridicos relevantes para o caso
+3. Identificar clausulas, condicoes ou ausencias que possam favorecer ou prejudicar o cliente
+4. Avaliar as chances de exito numa eventual acao
 
 SUA RESPOSTA DEVE CONTER APENAS:
 - Tipo do documento identificado
-- Principais pontos relevantes (máximo 3, objetivamente)
-- Avaliação das chances de êxito: ALTA, MODERADA ou BAIXA — com uma frase de motivo
+- Principais pontos relevantes (maximo 3, objetivamente)
+- Avaliacao das chances de exito: ALTA, MODERADA ou BAIXA - com uma frase de motivo
 
-NÃO use juridiquês excessivo. Responda em português, claro e direto.`;
+NAO use juridiques excessivo. Responda em portugues, claro e direto.`;
 
 const TOOLS = [
   {
     name: 'notificar_especialista',
-    description: 'Notifica o especialista da área sobre um novo lead qualificado. Use quando tiver: nome do cliente, situação jurídica clara e horário preferido.',
+    description: 'Notifica o especialista da area sobre um novo lead qualificado. Use quando tiver: nome do cliente, situacao juridica clara e horario preferido.',
     input_schema: {
       type: 'object',
       properties: {
         area: {
           type: 'string',
           enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor', 'previdenciario'],
-          description: 'Área jurídica do caso'
+          description: 'Area juridica do caso'
         },
         nome_cliente: { type: 'string', description: 'Nome do cliente' },
-        horario_preferido: { type: 'string', description: 'Melhor horário para contato' },
+        horario_preferido: { type: 'string', description: 'Melhor horario para contato' },
         resumo_caso: {
           type: 'string',
-          description: 'Resumo completo: situação, fatos, documentos analisados com resultado, pontos jurídicos relevantes'
+          description: 'Resumo completo: situacao, fatos, documentos analisados com resultado, pontos juridicos relevantes'
         }
       },
       required: ['area', 'nome_cliente', 'horario_preferido', 'resumo_caso']
@@ -176,14 +181,14 @@ const TOOLS = [
   },
   {
     name: 'reenviar_lembrete',
-    description: 'Reenviar lembrete urgente ao especialista quando o cliente informar que ainda não foi contatado.',
+    description: 'Reenviar lembrete urgente ao especialista quando o cliente informar que ainda nao foi contatado.',
     input_schema: {
       type: 'object',
       properties: {
         area: {
           type: 'string',
           enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor', 'previdenciario'],
-          description: 'Área jurídica do caso'
+          description: 'Area juridica do caso'
         },
         nome_cliente: { type: 'string', description: 'Nome do cliente que aguarda retorno' }
       },
@@ -194,7 +199,7 @@ const TOOLS = [
 
 const conversationHistory = loadHistory();
 
-// Debounce: acumula mensagens picadas e processa juntas após 8s de silêncio
+// Debounce: acumula mensagens picadas e processa juntas apos 8s de silencio
 const pendingMessages = {};
 
 function extractText(content) {
@@ -212,66 +217,153 @@ function buildSystemPrompt(userId) {
 
   if (textMessages.length === 0) return OFFICE_CONTEXT;
 
-  // Inclui as últimas mensagens reais para o Claude ter contexto correto
   const recentLines = textMessages
     .slice(-8)
     .map(m => `${m.role === 'user' ? 'Cliente' : 'Ana'}: ${m.content}`)
     .join('\n');
 
   return OFFICE_CONTEXT +
-    `\n\nATENÇÃO CRÍTICA — CONVERSA EM ANDAMENTO:\n` +
-    `Você JÁ está atendendo este cliente. NÃO se apresente. Retome exatamente de onde parou.\n\n` +
-    `ÚLTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
+    `\n\nATENCAO CRITICA - CONVERSA EM ANDAMENTO:\n` +
+    `Voce JA esta atendendo este cliente. NAO se apresente. Retome exatamente de onde parou.\n\n` +
+    `ULTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
+}
+
+async function sendEmailToSpecialist(toEmail, subject, htmlBody) {
+  if (!GMAIL_USER || !GMAIL_PASS) {
+    console.log('[Email] Credenciais nao configuradas, pulando envio.');
+    return;
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: GMAIL_USER, pass: GMAIL_PASS }
+    });
+    await transporter.sendMail({
+      from: `"Ana - Assis e Xavier Advogados" <${GMAIL_USER}>`,
+      to: toEmail,
+      subject,
+      html: htmlBody
+    });
+    console.log(`[Email] Enviado para ${toEmail}`);
+  } catch (e) {
+    console.error('[Email] Erro ao enviar:', e.message);
+  }
 }
 
 async function executeTool(toolName, toolInput, clientPhone) {
   if (toolName === 'notificar_especialista') {
     const { area, nome_cliente, horario_preferido, resumo_caso } = toolInput;
     const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
+    const areaLabel = area.toUpperCase().replace('_', '/');
 
-    const message =
-      `🔔 *NOVO ATENDIMENTO — ${area.toUpperCase().replace('_', '/')}*\n\n` +
+    const whatsappMsg =
+      `🔔 *NOVO ATENDIMENTO - ${areaLabel}*\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `📱 *WhatsApp:* +${clientPhone}\n` +
-      `⏰ *Melhor horário:* ${horario_preferido}\n\n` +
+      `⏰ *Melhor horario:* ${horario_preferido}\n\n` +
       `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
-      `_Atendimento realizado pela Ana — Assis e Xavier Advogados_`;
+      `_Atendimento realizado pela Ana - Assis e Xavier Advogados_`;
 
-    try {
-      await sendWhatsAppMessage(specialist.phone, message);
-      console.log(`[Especialista] Notificação enviada para ${specialist.name}`);
-      // Limpa histórico após 20s — caso encerrado, próxima mensagem inicia conversa nova
-      setTimeout(() => {
-        delete conversationHistory[clientPhone];
-        saveHistory(conversationHistory);
-        console.log(`[Histórico] Limpo para ${clientPhone} após encerramento do caso`);
-      }, 20000);
-      return `Especialista ${specialist.name} notificado com sucesso.`;
-    } catch (e) {
-      console.error('[Especialista] Erro:', e.message);
-      return `Notificação registrada para ${specialist.name}.`;
+    const emailHtml =
+      `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">` +
+      `<h2 style="color:#1a5276">Novo Atendimento - ${areaLabel}</h2>` +
+      `<table style="border-collapse:collapse;width:100%">` +
+      `<tr><td style="padding:8px;font-weight:bold;width:140px">Cliente:</td><td style="padding:8px">${nome_cliente}</td></tr>` +
+      `<tr style="background:#f2f2f2"><td style="padding:8px;font-weight:bold">WhatsApp:</td><td style="padding:8px">+${clientPhone}</td></tr>` +
+      `<tr><td style="padding:8px;font-weight:bold">Melhor horario:</td><td style="padding:8px">${horario_preferido}</td></tr>` +
+      `</table>` +
+      `<h3 style="color:#1a5276;margin-top:20px">Resumo do Caso</h3>` +
+      `<p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #1a5276">${resumo_caso}</p>` +
+      `<hr style="margin-top:24px">` +
+      `<small style="color:#888">Atendimento realizado pela Ana - Assis e Xavier Advogados</small>` +
+      `</div>`;
+
+    // 1) Tenta via TEMPLATE (chega a qualquer hora, mesmo fora da janela de 24h)
+    const templateOk = await sendWhatsAppTemplate(specialist.phone, [
+      `Novo atendimento (${areaLabel})`,
+      nome_cliente,
+      `+${clientPhone}`,
+      horario_preferido,
+      resumo_caso
+    ]);
+
+    // 2) Fallback: texto livre (so funciona se estiver dentro da janela de 24h)
+    if (!templateOk) {
+      try {
+        await sendWhatsAppMessage(specialist.phone, whatsappMsg);
+        console.log(`[Especialista] WhatsApp (texto livre) enviado para ${specialist.name}`);
+      } catch (e) {
+        console.error('[Especialista] Erro WhatsApp:', e.message);
+      }
     }
+
+    // 3) Email — garantia que sempre chega
+    await sendEmailToSpecialist(
+      specialist.email,
+      `Novo Atendimento - ${areaLabel} | ${nome_cliente}`,
+      emailHtml
+    );
+
+    // Limpa historico apos 3h para que o admin consiga ver a conversa completa
+    setTimeout(() => {
+      delete conversationHistory[clientPhone];
+      saveHistory(conversationHistory);
+      console.log(`[Historico] Limpo para ${clientPhone} apos 3h do encerramento`);
+    }, 3 * 60 * 60 * 1000);
+
+    return `Especialista ${specialist.name} notificado com sucesso.`;
   }
 
   if (toolName === 'reenviar_lembrete') {
     const { area, nome_cliente } = toolInput;
     const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
 
-    const message =
-      `⏰ *LEMBRETE URGENTE — CLIENTE AGUARDANDO*\n\n` +
+    const whatsappMsg =
+      `⏰ *LEMBRETE URGENTE - CLIENTE AGUARDANDO*\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `📱 *WhatsApp:* +${clientPhone}\n\n` +
-      `O cliente informou que ainda não recebeu seu contato. Por favor, entre em contato o quanto antes.\n\n` +
+      `O cliente informou que ainda nao recebeu seu contato. Por favor, entre em contato o quanto antes.\n\n` +
       `_Assis e Xavier Advogados_`;
 
-    try {
-      await sendWhatsAppMessage(specialist.phone, message);
-      console.log(`[Lembrete] Reenviado para ${specialist.name}`);
-      return `Lembrete reenviado para ${specialist.name}.`;
-    } catch (e) {
-      console.error('[Lembrete] Erro:', e.message);
-      return `Lembrete registrado para ${specialist.name}.`;
+    const emailHtml =
+      `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">` +
+      `<h2 style="color:#c0392b">Lembrete Urgente - Cliente Aguardando</h2>` +
+      `<table style="border-collapse:collapse;width:100%">` +
+      `<tr><td style="padding:8px;font-weight:bold;width:140px">Cliente:</td><td style="padding:8px">${nome_cliente}</td></tr>` +
+      `<tr style="background:#f2f2f2"><td style="padding:8px;font-weight:bold">WhatsApp:</td><td style="padding:8px">+${clientPhone}</td></tr>` +
+      `</table>` +
+      `<p style="margin-top:16px;color:#c0392b;font-weight:bold">O cliente informou que ainda nao recebeu seu contato. Por favor, entre em contato o quanto antes.</p>` +
+      `<hr style="margin-top:24px">` +
+      `<small style="color:#888">Assis e Xavier Advogados</small>` +
+      `</div>`;
+
+    // 1) Tenta via TEMPLATE (chega a qualquer hora)
+    const templateOk = await sendWhatsAppTemplate(specialist.phone, [
+      `LEMBRETE URGENTE (${area.toUpperCase().replace('_', '/')})`,
+      nome_cliente,
+      `+${clientPhone}`,
+      '-',
+      'Cliente informou que ainda nao recebeu seu contato. Entre em contato o quanto antes.'
+    ]);
+
+    // 2) Fallback: texto livre (dentro da janela de 24h)
+    if (!templateOk) {
+      try {
+        await sendWhatsAppMessage(specialist.phone, whatsappMsg);
+        console.log(`[Lembrete] WhatsApp (texto livre) reenviado para ${specialist.name}`);
+      } catch (e) {
+        console.error('[Lembrete] Erro WhatsApp:', e.message);
+      }
     }
+
+    // 3) Email — garantia
+    await sendEmailToSpecialist(
+      specialist.email,
+      `Lembrete Urgente - ${nome_cliente} aguarda seu contato`,
+      emailHtml
+    );
+
+    return `Lembrete reenviado para ${specialist.name}.`;
   }
 
   return 'Ferramenta desconhecida.';
@@ -288,7 +380,6 @@ async function callClaudeAPI(userMessage, userId) {
     const messages = [...conversationHistory[userId]];
     let response;
 
-    // Loop para suportar múltiplas chamadas de ferramenta se necessário
     while (true) {
       response = await axios.post(
         'https://api.anthropic.com/v1/messages',
@@ -312,13 +403,11 @@ async function callClaudeAPI(userMessage, userId) {
       const toolUseBlock = content.find(b => b.type === 'tool_use');
 
       if (!toolUseBlock) {
-        // Resposta final sem tool use
         const assistantText = extractText(content);
         conversationHistory[userId].push({ role: 'assistant', content: assistantText });
         break;
       }
 
-      // Executa a ferramenta
       messages.push({ role: 'assistant', content });
       conversationHistory[userId].push({ role: 'assistant', content });
 
@@ -341,7 +430,7 @@ async function callClaudeAPI(userMessage, userId) {
 
   } catch (error) {
     console.error('[Claude] Erro:', error.response?.data || error.message);
-    return `Desculpe, tive um problema técnico. Entre em contato via WhatsApp: ${ESCRITORIO_PHONE}`;
+    return `Desculpe, tive um problema tecnico. Entre em contato via WhatsApp: ${ESCRITORIO_PHONE}`;
   }
 }
 
@@ -374,10 +463,10 @@ async function analyzeDocumentWithClaude(buffer, mimeType, conversationContext) 
     } else if (mimeType === 'application/pdf') {
       const pdfData = await pdfParse(buffer);
       const text = pdfData.text.substring(0, 10000);
-      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEÚDO DO DOCUMENTO:\n${text}`;
+      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEUDO DO DOCUMENTO:\n${text}`;
     } else {
       const text = buffer.toString('utf8').substring(0, 10000);
-      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEÚDO DO DOCUMENTO:\n${text}`;
+      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEUDO DO DOCUMENTO:\n${text}`;
     }
 
     const response = await axios.post(
@@ -399,7 +488,7 @@ async function analyzeDocumentWithClaude(buffer, mimeType, conversationContext) 
 
     return response.data.content[0].text;
   } catch (error) {
-    console.error('[Análise] Erro:', error.response?.data || error.message);
+    console.error('[Analise] Erro:', error.response?.data || error.message);
     return null;
   }
 }
@@ -432,13 +521,13 @@ async function handleDocument(message, userId) {
     const analysisResult = await analyzeDocumentWithClaude(buffer, mimeType, recentHistory);
 
     if (!analysisResult) {
-      return callClaudeAPI('O cliente enviou um documento mas não consegui processá-lo. Peça para enviar em PDF ou como foto nítida.', userId);
+      return callClaudeAPI('O cliente enviou um documento mas nao consegui processa-lo. Peca para enviar em PDF ou como foto nitida.', userId);
     }
 
-    return callClaudeAPI(`[ANÁLISE DO DOCUMENTO - ${filename}]\n${analysisResult}`, userId);
+    return callClaudeAPI(`[ANALISE DO DOCUMENTO - ${filename}]\n${analysisResult}`, userId);
   } catch (error) {
     console.error('[Doc] Erro ao processar documento:', error.message);
-    return callClaudeAPI('O cliente enviou um documento mas ocorreu um erro técnico. Peça para tentar novamente.', userId);
+    return callClaudeAPI('O cliente enviou um documento mas ocorreu um erro tecnico. Peca para tentar novamente.', userId);
   }
 }
 
@@ -462,9 +551,51 @@ function typingDelay(text) {
   return new Promise(resolve => setTimeout(resolve, delay));
 }
 
+// Envia notificacao via template aprovado pelo Meta.
+// Funciona a QUALQUER hora, mesmo fora da janela de 24h.
+// Retorna true se enviou, false se falhou (template inexistente, nao aprovado, etc).
+async function sendWhatsAppTemplate(to, bodyParams) {
+  if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN || !LEAD_TEMPLATE_NAME) return false;
+
+  // Variaveis de template do Meta nao podem ter quebras de linha nem espacos multiplos
+  const clean = (s) => String(s ?? '-').replace(/\s+/g, ' ').trim().substring(0, 700) || '-';
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'template',
+        template: {
+          name: LEAD_TEMPLATE_NAME,
+          language: { code: TEMPLATE_LANG },
+          components: [
+            {
+              type: 'body',
+              parameters: bodyParams.map(p => ({ type: 'text', text: clean(p) }))
+            }
+          ]
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    console.log(`[Template] Enviado para ${to}. ID: ${response.data.messages?.[0]?.id}`);
+    return true;
+  } catch (error) {
+    console.error('[Template] Erro:', error.response?.data?.error?.message || error.message);
+    return false;
+  }
+}
+
 async function sendWhatsAppMessage(to, message) {
   if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
-    console.error('[Meta] Parâmetros ausentes:', { to, PHONE_NUMBER_ID: !!PHONE_NUMBER_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN });
+    console.error('[Meta] Parametros ausentes:', { to, PHONE_NUMBER_ID: !!PHONE_NUMBER_ID, WHATSAPP_TOKEN: !!WHATSAPP_TOKEN });
     return;
   }
 
@@ -499,7 +630,7 @@ app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('[Webhook] Verificação OK.');
+    console.log('[Webhook] Verificacao OK.');
     return res.status(200).send(challenge);
   }
 
@@ -522,12 +653,11 @@ app.post('/webhook', async (req, res) => {
 
     await markAsRead(messageId);
 
-    // Áudio
     if (message.type === 'audio' || message.type === 'voice') {
       const audioReplies = [
-        'Ouvi seu áudio! Me conta um pouco mais por escrito? Assim consigo te direcionar para o especialista certo aqui no escritório.',
-        'Recebi seu áudio! Para garantir que nada se perca, pode me resumir aqui o que está acontecendo?',
-        'Escutei! Me escreve rapidinho o que precisa, assim já te passo para o advogado certo.'
+        'Ouvi seu audio! Me conta um pouco mais por escrito? Assim consigo te direcionar para o especialista certo aqui no escritorio.',
+        'Recebi seu audio! Para garantir que nada se perca, pode me resumir aqui o que esta acontecendo?',
+        'Escutei! Me escreve rapidinho o que precisa, assim ja te passo para o advogado certo.'
       ];
       const reply = audioReplies[Math.floor(Math.random() * audioReplies.length)];
       await typingDelay(reply);
@@ -535,13 +665,11 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Documento ou imagem — flush mensagens de texto pendentes primeiro
     if (message.type === 'document' || message.type === 'image') {
       if (pendingMessages[senderNumber]) {
         clearTimeout(pendingMessages[senderNumber].timer);
         const pending = pendingMessages[senderNumber];
         delete pendingMessages[senderNumber];
-        // Adiciona textos pendentes ao histórico sem gerar resposta
         if (!conversationHistory[senderNumber]) conversationHistory[senderNumber] = [];
         conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n') });
         saveHistory(conversationHistory);
@@ -554,13 +682,11 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Ignora outros tipos
     if (message.type !== 'text') return;
 
     const incomingText = message.text.body;
     console.log(`[Webhook] Texto de ${senderNumber}: ${incomingText}`);
 
-    // Debounce: acumula mensagens e aguarda 8s após a última
     if (pendingMessages[senderNumber]) {
       clearTimeout(pendingMessages[senderNumber].timer);
       pendingMessages[senderNumber].messages.push(incomingText);
@@ -690,7 +816,7 @@ function openChat(ph){
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
 if(tk){show('list');load();}
-</script>
+<\/script>
 </body>
 </html>`;
 
@@ -719,18 +845,20 @@ app.get('/admin/conversations', (req, res) => {
   res.json(result);
 });
 
-
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
-    message: 'Chatbot está funcionando!',
+    message: 'Chatbot esta funcionando!',
     api: 'Meta WhatsApp Cloud API',
-    features: ['texto com debounce 8s', 'áudio', 'PDF', 'imagens', 'análise jurídica', 'notificação de especialistas', 'lembrete automático'],
+    features: ['texto com debounce 8s', 'audio', 'PDF', 'imagens', 'analise juridica', 'notificacao de especialistas', 'lembrete automatico', 'email de especialistas'],
     specialists: Object.entries(SPECIALISTS).map(([area, s]) => ({ area, name: s.name })),
     config: {
       WHATSAPP_TOKEN: WHATSAPP_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
       PHONE_NUMBER_ID: PHONE_NUMBER_ID ? `${PHONE_NUMBER_ID.slice(0, 6)}...` : 'NAO DEFINIDO',
       CLAUDE_API_KEY: CLAUDE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
+      GMAIL_USER: GMAIL_USER ? GMAIL_USER : 'NAO DEFINIDO',
+      LEAD_TEMPLATE_NAME: LEAD_TEMPLATE_NAME ? LEAD_TEMPLATE_NAME : 'NAO DEFINIDO',
+      TEMPLATE_LANG: TEMPLATE_LANG,
       VERIFY_TOKEN: VERIFY_TOKEN
     }
   });
@@ -741,7 +869,6 @@ app.listen(PORT, () => {
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
   console.log(`Webhook: GET|POST /webhook`);
 
-  // Ping a cada 10 minutos para evitar que o Render durma
   const SERVICE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   setInterval(async () => {
     try {
