@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Busca e Apreensão de Veículo em SC | Assis e Xavier Advogados</title>
-  <meta name="description" content="Recebeu uma ação de busca e apreensão de veículo em Santa Catarina? Assis e Xavier Advogados oferece análise contratual, verificação de cobranças e defesa judicial. Atendimento on-line em todo o estado.">
+  <title>Busca e Apreensão de Veículo em SC | Assis Xavier Advogados</title>
+  <meta name="description" content="Recebeu uma ação de busca e apreensão de veículo em Santa Catarina? Assis Xavier Advogados oferece análise contratual, verificação de cobranças e defesa judicial. Atendimento on-line em todo o estado.">
   <meta name="robots" content="index, follow">
   <meta name="keywords" content="busca e apreensão veículo Santa Catarina, advogado busca apreensão SC, financiamento veículo defesa judicial, Florianópolis Joinville Blumenau advogado">
   <link rel="canonical" href="https://busca.assisxavier.com.br">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%230C1B33'/%3E%3Ctext x='50%25' y='54%25' dominant-baseline='middle' text-anchor='middle' font-family='Georgia%2C serif' font-size='28' font-weight='700' fill='%23B8963E'%3EA%26X%3C/text%3E%3C/svg%3E">
 
   <!-- Open Graph -->
-  <meta property="og:title" content="Busca e Apreensão de Veículo em SC | Assis e Xavier Advogados">
+  <meta property="og:title" content="Busca e Apreensão de Veículo em SC | Assis Xavier Advogados">
   <meta property="og:description" content="Orientação jurídica em ações de busca e apreensão de veículos. Atendimento on-line em todo o Estado de Santa Catarina.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://busca.assisxavier.com.br">
@@ -24,7 +24,7 @@
   {
     "@context": "https://schema.org",
     "@type": ["LegalService", "LocalBusiness"],
-    "name": "Assis e Xavier Advogados",
+    "name": "Assis Xavier Advogados",
     "url": "https://busca.assisxavier.com.br",
     "telephone": "+55-44-99977-8551",
     "description": "Orientação jurídica em ações de busca e apreensão de veículos em Santa Catarina. Análise contratual, verificação de cobranças e defesa judicial.",
@@ -181,9 +181,15 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      height: 72px;
+      height: 100px;
       gap: 24px;
     }
+
+    .header-logo { display: flex; align-items: center; gap: 0; text-decoration: none; }
+    .header-monogram { height: 96px; width: 96px; display: block; flex-shrink: 0; border: none; outline: none; margin-right: -12px; }
+    .header-wordmark { display: flex; flex-direction: column; line-height: 1.2; justify-content: center; }
+    .header-name { font-family: 'Poppins', sans-serif; font-size: 1.5rem; font-weight: 700; color: var(--white); letter-spacing: .04em; }
+    .header-sub { font-size: .8125rem; color: var(--gold); letter-spacing: .18em; text-transform: uppercase; text-align: center; }
 
     .logo {
       display: flex;
@@ -732,11 +738,20 @@
     @media (max-width: 1024px) {
       .cards-grid { grid-template-columns: repeat(2, 1fr); }
       .docs-layout { gap: 40px; }
+
+      .header-inner { height: 88px; }
+      .header-monogram { height: 80px; width: 80px; }
+      .header-name { font-size: 1.3rem; }
     }
 
     @media (max-width: 768px) {
       .nav, .header-cta { display: none; }
       .hamburger { display: flex; }
+
+      .header-inner { height: 72px; }
+      .header-monogram { height: 60px; width: 60px; margin-right: -8px; }
+      .header-name { font-size: 1.1rem; }
+      .header-sub { font-size: .7rem; letter-spacing: .12em; }
 
       #inicio { padding: 130px 0 72px; }
       .hero-actions { flex-direction: column; align-items: flex-start; }
@@ -760,6 +775,11 @@
     @media (max-width: 480px) {
       .container { padding: 0 16px; }
       .hero-badge { font-size: .75rem; }
+
+      .header-inner { height: 64px; }
+      .header-monogram { height: 52px; width: 52px; margin-right: -6px; }
+      .header-name { font-size: 1rem; }
+      .header-sub { display: none; }
     }
   </style>
 </head>
@@ -773,9 +793,12 @@
 <header id="header">
   <div class="container">
     <div class="header-inner">
-      <a href="#inicio" class="logo" aria-label="Assis e Xavier Advogados - Início">
-        <span class="logo-main">Assis e Xavier</span>
-        <span class="logo-sub">Advogados</span>
+      <a href="#inicio" class="header-logo" aria-label="Assis Xavier Advogados - Início">
+        <img src="/logo7.png" alt="" aria-hidden="true" class="header-monogram">
+        <span class="header-wordmark">
+          <span class="header-name">Assis Xavier</span>
+          <span class="header-sub">Advogados</span>
+        </span>
       </a>
 
       <nav class="nav" aria-label="Menu principal">
@@ -984,7 +1007,7 @@
     <div class="footer-top">
       <div class="footer-brand">
         <div class="logo">
-          <span class="logo-main">Assis e Xavier</span>
+          <span class="logo-main">Assis Xavier</span>
           <span class="logo-sub">Advogados</span>
         </div>
         <p class="footer-tagline">Atendimento on-line em todo o Estado de Santa Catarina.</p>
@@ -1012,7 +1035,7 @@
 
     <div class="footer-bottom">
       <p class="footer-copy">
-        &copy; <span id="year"></span> Assis e Xavier Advogados. Todos os direitos reservados.
+        &copy; <span id="year"></span> Assis Xavier Advogados. Todos os direitos reservados.
       </p>
       <p class="footer-legal">
         As informações contidas neste site têm caráter meramente informativo e não constituem aconselhamento jurídico. Para orientação específica, consulte um advogado.
