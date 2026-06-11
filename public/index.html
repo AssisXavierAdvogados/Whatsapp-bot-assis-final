@@ -432,25 +432,75 @@
       50%       { box-shadow: 0 4px 32px rgba(37,211,102,.7); }
     }
 
-    /* RESPONSIVE */
+    /* ── TABLET (≤ 1024px) ── */
     @media (max-width: 1024px) {
       .areas-grid { grid-template-columns: repeat(2, 1fr); }
+
+      .header-inner { height: 88px; }
+      .header-monogram { height: 80px; width: 80px; }
+      .header-name { font-size: 1.3rem; }
     }
+
+    /* ── SMARTPHONE (≤ 768px) ── */
     @media (max-width: 768px) {
-      #inicio { padding: 130px 0 72px; }
-      #areas { padding: 64px 0; }
+      /* Header */
+      .header-inner { height: 72px; }
+      .header-monogram { height: 60px; width: 60px; margin-right: -8px; }
+      .header-name { font-size: 1.1rem; }
+      .header-sub { font-size: .7rem; letter-spacing: .12em; }
+      .btn-whatsapp { padding: 8px 14px; font-size: .8rem; }
+      .btn-whatsapp svg { display: none; }
+
+      /* Hero */
+      #inicio { padding: 100px 0 64px; }
+      #areas { padding: 56px 0; }
+      #equipe { padding: 48px 0 64px; }
+
+      /* Areas */
       .areas-grid { grid-template-columns: 1fr; }
+
+      /* Team — empilhado, foto centralizada */
+      .team-grid {
+        grid-template-columns: 1fr;
+        gap: 48px;
+        max-width: 340px;
+      }
+      .team-photo-wrap {
+        width: 200px;
+        height: 200px;
+      }
+
+      /* Footer */
       .footer-top { flex-direction: column; gap: 28px; }
       .footer-bottom { flex-direction: column; align-items: flex-start; }
       .footer-legal { text-align: left; max-width: 100%; }
-      .whatsapp-float { bottom: 20px; right: 16px; padding: 12px 18px 12px 14px; font-size: .8125rem; }
+
+      /* CTA */
       .cta-actions { flex-direction: column; align-items: center; }
       .cta-actions .btn { width: 100%; max-width: 360px; justify-content: center; }
+
+      /* WhatsApp float */
+      .whatsapp-float { bottom: 16px; right: 12px; padding: 12px 16px; font-size: .8125rem; }
+      .whatsapp-float span { display: none; }
     }
+
+    /* ── SMARTPHONE PEQUENO (≤ 480px) ── */
     @media (max-width: 480px) {
       .container { padding: 0 16px; }
+
+      .header-inner { height: 64px; }
+      .header-monogram { height: 52px; width: 52px; margin-right: -6px; }
+      .header-name { font-size: 1rem; }
+      .header-sub { display: none; }
+
+      #inicio { padding: 88px 0 56px; }
+
       .hero-cta { flex-direction: column; align-items: center; }
       .hero-cta .btn { width: 100%; max-width: 340px; justify-content: center; }
+
+      .team-photo-wrap { width: 180px; height: 180px; }
+
+      .divider { margin-bottom: 40px; }
     }
   </style>
 </head>
