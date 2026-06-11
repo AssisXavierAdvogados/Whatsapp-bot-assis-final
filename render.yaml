@@ -19,3 +19,9 @@ services:
         sync: false
       - key: PHONE_NUMBER_ID
         sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_PASS
+        sync: false
