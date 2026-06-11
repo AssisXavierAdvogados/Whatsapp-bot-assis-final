@@ -38,6 +38,8 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 const GMAIL_USER = process.env.GMAIL_USER;
 const GMAIL_PASS = process.env.GMAIL_PASS;
+const LEAD_TEMPLATE_NAME = process.env.LEAD_TEMPLATE_NAME; // ex: novo_lead (aprovado no Meta)
+const TEMPLATE_LANG = process.env.TEMPLATE_LANG || 'pt_BR';
 
 const SPECIALISTS = {
   trabalhista:    { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087', email: 'rafaelpinhatti_adv@hotmail.com' },
@@ -276,13 +278,26 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `<small style="color:#888">Atendimento realizado pela Ana - Assis e Xavier Advogados</small>` +
       `</div>`;
 
-    try {
-      await sendWhatsAppMessage(specialist.phone, whatsappMsg);
-      console.log(`[Especialista] WhatsApp enviado para ${specialist.name}`);
-    } catch (e) {
-      console.error('[Especialista] Erro WhatsApp:', e.message);
+    // 1) Tenta via TEMPLATE (chega a qualquer hora, mesmo fora da janela de 24h)
+    const templateOk = await sendWhatsAppTemplate(specialist.phone, [
+      `Novo atendimento (${areaLabel})`,
+      nome_cliente,
+      `+${clientPhone}`,
+      horario_preferido,
+      resumo_caso
+    ]);
+
+    // 2) Fallback: texto livre (so funciona se estiver dentro da janela de 24h)
+    if (!templateOk) {
+      try {
+        await sendWhatsAppMessage(specialist.phone, whatsappMsg);
+        console.log(`[Especialista] WhatsApp (texto livre) enviado para ${specialist.name}`);
+      } catch (e) {
+        console.error('[Especialista] Erro WhatsApp:', e.message);
+      }
     }
 
+    // 3) Email — garantia que sempre chega
     await sendEmailToSpecialist(
       specialist.email,
       `Novo Atendimento - ${areaLabel} | ${nome_cliente}`,
@@ -322,13 +337,26 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `<small style="color:#888">Assis e Xavier Advogados</small>` +
       `</div>`;
 
-    try {
-      await sendWhatsAppMessage(specialist.phone, whatsappMsg);
-      console.log(`[Lembrete] WhatsApp reenviado para ${specialist.name}`);
-    } catch (e) {
-      console.error('[Lembrete] Erro WhatsApp:', e.message);
+    // 1) Tenta via TEMPLATE (chega a qualquer hora)
+    const templateOk = await sendWhatsAppTemplate(specialist.phone, [
+      `LEMBRETE URGENTE (${area.toUpperCase().replace('_', '/')})`,
+      nome_cliente,
+      `+${clientPhone}`,
+      '-',
+      'Cliente informou que ainda nao recebeu seu contato. Entre em contato o quanto antes.'
+    ]);
+
+    // 2) Fallback: texto livre (dentro da janela de 24h)
+    if (!templateOk) {
+      try {
+        await sendWhatsAppMessage(specialist.phone, whatsappMsg);
+        console.log(`[Lembrete] WhatsApp (texto livre) reenviado para ${specialist.name}`);
+      } catch (e) {
+        console.error('[Lembrete] Erro WhatsApp:', e.message);
+      }
     }
 
+    // 3) Email — garantia
     await sendEmailToSpecialist(
       specialist.email,
       `Lembrete Urgente - ${nome_cliente} aguarda seu contato`,
@@ -521,6 +549,48 @@ function typingDelay(text) {
   const calculated = baseDelay + (text.length / charsPerSecond) * 1000;
   const delay = Math.min(Math.max(calculated, 2000), 8000);
   return new Promise(resolve => setTimeout(resolve, delay));
+}
+
+// Envia notificacao via template aprovado pelo Meta.
+// Funciona a QUALQUER hora, mesmo fora da janela de 24h.
+// Retorna true se enviou, false se falhou (template inexistente, nao aprovado, etc).
+async function sendWhatsAppTemplate(to, bodyParams) {
+  if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN || !LEAD_TEMPLATE_NAME) return false;
+
+  // Variaveis de template do Meta nao podem ter quebras de linha nem espacos multiplos
+  const clean = (s) => String(s ?? '-').replace(/\s+/g, ' ').trim().substring(0, 700) || '-';
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'template',
+        template: {
+          name: LEAD_TEMPLATE_NAME,
+          language: { code: TEMPLATE_LANG },
+          components: [
+            {
+              type: 'body',
+              parameters: bodyParams.map(p => ({ type: 'text', text: clean(p) }))
+            }
+          ]
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    console.log(`[Template] Enviado para ${to}. ID: ${response.data.messages?.[0]?.id}`);
+    return true;
+  } catch (error) {
+    console.error('[Template] Erro:', error.response?.data?.error?.message || error.message);
+    return false;
+  }
 }
 
 async function sendWhatsAppMessage(to, message) {
@@ -787,6 +857,8 @@ app.get('/health', (req, res) => {
       PHONE_NUMBER_ID: PHONE_NUMBER_ID ? `${PHONE_NUMBER_ID.slice(0, 6)}...` : 'NAO DEFINIDO',
       CLAUDE_API_KEY: CLAUDE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
       GMAIL_USER: GMAIL_USER ? GMAIL_USER : 'NAO DEFINIDO',
+      LEAD_TEMPLATE_NAME: LEAD_TEMPLATE_NAME ? LEAD_TEMPLATE_NAME : 'NAO DEFINIDO',
+      TEMPLATE_LANG: TEMPLATE_LANG,
       VERIFY_TOKEN: VERIFY_TOKEN
     }
   });

@@ -25,3 +25,7 @@ services:
         sync: false
       - key: GMAIL_PASS
         sync: false
+      - key: LEAD_TEMPLATE_NAME
+        sync: false
+      - key: TEMPLATE_LANG
+        value: pt_BR
