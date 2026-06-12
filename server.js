@@ -947,4 +947,19 @@ app.listen(PORT, () => {
       console.log('[Ping] Falha no ping:', e.message);
     }
   }, 10 * 60 * 1000);
+
+  // Cutuca o Supabase a cada 6h para nao pausar por inatividade (limite de 7 dias)
+  if (supabaseEnabled()) {
+    setInterval(async () => {
+      try {
+        await axios.get(
+          `${SUPABASE_URL}/rest/v1/conversations?select=phone&limit=1`,
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        );
+        console.log('[Ping] Supabase ativo');
+      } catch (e) {
+        console.log('[Ping] Falha no ping do Supabase:', e.message);
+      }
+    }, 6 * 60 * 60 * 1000);
+  }
 });
