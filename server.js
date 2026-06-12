@@ -36,12 +36,12 @@ function supabaseEnabled() {
 }
 
 // Grava (upsert) a conversa de um numero. Fire-and-forget: nao trava a resposta.
-async function supabaseUpsert(phone, messages) {
+async function supabaseUpsert(phone, messages, extra = {}) {
   if (!supabaseEnabled() || !phone || !Array.isArray(messages)) return;
   try {
     await axios.post(
       `${SUPABASE_URL}/rest/v1/conversations`,
-      { phone, messages, updated_at: new Date().toISOString() },
+      { phone, messages, updated_at: new Date().toISOString(), ...extra },
       {
         headers: {
           apikey: SUPABASE_KEY,
@@ -56,12 +56,34 @@ async function supabaseUpsert(phone, messages) {
   }
 }
 
+// Marca/atualiza um campo da conversa (ex: handled=true)
+async function supabasePatch(phone, fields) {
+  if (!supabaseEnabled() || !phone) return false;
+  try {
+    await axios.patch(
+      `${SUPABASE_URL}/rest/v1/conversations?phone=eq.${encodeURIComponent(phone)}`,
+      fields,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return true;
+  } catch (e) {
+    console.error('[Supabase] Erro ao atualizar:', e.response?.data || e.message);
+    return false;
+  }
+}
+
 // Le todas as conversas arquivadas (para o painel /admin)
 async function supabaseGetAll() {
   if (!supabaseEnabled()) return null;
   try {
     const r = await axios.get(
-      `${SUPABASE_URL}/rest/v1/conversations?select=phone,messages,updated_at&order=updated_at.desc`,
+      `${SUPABASE_URL}/rest/v1/conversations?select=phone,messages,updated_at,meta,handled&order=updated_at.desc`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
     );
     return r.data;
@@ -71,10 +93,14 @@ async function supabaseGetAll() {
   }
 }
 
+// Metadados da conversa (nome, area, especialista) capturados ao notificar
+const conversationMeta = {};
+
 // Salva no arquivo local E arquiva o numero no Supabase
 function persist(userId) {
   saveHistory(conversationHistory);
-  supabaseUpsert(userId, conversationHistory[userId]);
+  const extra = conversationMeta[userId] ? { meta: conversationMeta[userId] } : {};
+  supabaseUpsert(userId, conversationHistory[userId], extra);
 }
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
@@ -309,6 +335,15 @@ async function executeTool(toolName, toolInput, clientPhone) {
     const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
     const areaLabel = area.toUpperCase().replace('_', '/');
 
+    // Guarda metadados para exibir no painel (nome, area, especialista, horario)
+    conversationMeta[clientPhone] = {
+      nome: nome_cliente,
+      area: areaLabel,
+      especialista: specialist.name,
+      horario: horario_preferido
+    };
+    supabasePatch(clientPhone, { meta: conversationMeta[clientPhone], handled: false });
+
     const whatsappMsg =
       `🔔 *NOVO ATENDIMENTO - ${areaLabel}*\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
@@ -428,9 +463,10 @@ async function callClaudeAPI(userMessage, userId) {
       conversationHistory[userId] = [];
     }
 
-    conversationHistory[userId].push({ role: 'user', content: userMessage });
+    conversationHistory[userId].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
 
-    const messages = [...conversationHistory[userId]];
+    // A API do Claude recebe apenas role/content (sem o campo ts)
+    const messages = conversationHistory[userId].map(({ role, content }) => ({ role, content }));
     let response;
 
     while (true) {
@@ -457,12 +493,12 @@ async function callClaudeAPI(userMessage, userId) {
 
       if (!toolUseBlock) {
         const assistantText = extractText(content);
-        conversationHistory[userId].push({ role: 'assistant', content: assistantText });
+        conversationHistory[userId].push({ role: 'assistant', content: assistantText, ts: new Date().toISOString() });
         break;
       }
 
       messages.push({ role: 'assistant', content });
-      conversationHistory[userId].push({ role: 'assistant', content });
+      conversationHistory[userId].push({ role: 'assistant', content, ts: new Date().toISOString() });
 
       const toolResult = await executeTool(toolUseBlock.name, toolUseBlock.input, userId);
 
@@ -471,7 +507,7 @@ async function callClaudeAPI(userMessage, userId) {
         content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResult }]
       };
       messages.push(toolResultMsg);
-      conversationHistory[userId].push(toolResultMsg);
+      conversationHistory[userId].push({ ...toolResultMsg, ts: new Date().toISOString() });
     }
 
     if (conversationHistory[userId].length > 40) {
@@ -724,7 +760,7 @@ app.post('/webhook', async (req, res) => {
         const pending = pendingMessages[senderNumber];
         delete pendingMessages[senderNumber];
         if (!conversationHistory[senderNumber]) conversationHistory[senderNumber] = [];
-        conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n') });
+        conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n'), ts: new Date().toISOString() });
         persist(senderNumber);
       }
 
@@ -778,59 +814,120 @@ const ADMIN_HTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ana — Painel</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111b21;color:#e9edef;min-height:100vh}
-.screen{display:none}.screen.active{display:flex;flex-direction:column;min-height:100vh}
-#login{justify-content:center;align-items:center;padding:24px}
-.box{background:#202c33;border-radius:16px;padding:32px 24px;width:100%;max-width:360px}
-.box h1{font-size:24px;font-weight:700;margin-bottom:4px}.box p{color:#8696a0;font-size:14px;margin-bottom:24px}
-input[type=password]{width:100%;background:#2a3942;border:none;border-radius:8px;color:#e9edef;font-size:16px;padding:14px 16px;outline:none;margin-bottom:12px}
-button{width:100%;background:#00a884;border:none;border-radius:8px;color:#fff;font-size:16px;font-weight:600;padding:14px;cursor:pointer}
-button:active{opacity:.85}.err{color:#ef4444;font-size:13px;margin-top:8px;text-align:center}
-.hdr{background:#202c33;padding:16px 20px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}
-.hdr h2{font-size:17px;font-weight:600;flex:1}
-.back{font-size:26px;cursor:pointer;line-height:1}.ref{font-size:20px;cursor:pointer}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{--bg:#0b141a;--panel:#202c33;--panel2:#111b21;--green:#00a884;--green2:#005c4b;--txt:#e9edef;--mut:#8696a0;--line:#2a3942}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--txt);min-height:100vh}
+.screen{display:none}.screen.active{display:flex;flex-direction:column;height:100vh}
+/* LOGIN */
+#login{justify-content:center;align-items:center;padding:24px;background:linear-gradient(160deg,#0b141a,#16242d)}
+.box{background:var(--panel);border-radius:20px;padding:36px 26px;width:100%;max-width:360px;box-shadow:0 12px 40px rgba(0,0,0,.4);animation:pop .3s ease}
+@keyframes pop{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.logo{width:64px;height:64px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:800;margin:0 auto 16px;color:#fff}
+.box h1{font-size:22px;font-weight:700;text-align:center}.box p{color:var(--mut);font-size:13.5px;margin:4px 0 24px;text-align:center}
+input[type=password],input[type=text]{width:100%;background:#2a3942;border:1px solid transparent;border-radius:10px;color:var(--txt);font-size:16px;padding:14px 16px;outline:none}
+input:focus{border-color:var(--green)}
+button{width:100%;background:var(--green);border:none;border-radius:10px;color:#fff;font-size:16px;font-weight:600;padding:14px;cursor:pointer;margin-top:12px;transition:.15s}
+button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:10px;text-align:center}
+/* HEADER */
+.hdr{background:var(--panel);padding:14px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0;box-shadow:0 1px 0 rgba(0,0,0,.2)}
+.hdr .ttl{flex:1;min-width:0}.hdr .ttl b{font-size:17px;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr .ttl span{font-size:12px;color:var(--mut)}
+.back{font-size:28px;cursor:pointer;line-height:1;color:var(--txt);padding:0 4px}.ref{font-size:20px;cursor:pointer;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:50%}
+.ref:active{background:var(--line)}
+/* SEARCH + TABS */
+.tools{background:var(--panel2);padding:10px 14px;display:flex;flex-direction:column;gap:10px;flex-shrink:0;border-bottom:1px solid var(--line)}
+.search{display:flex;align-items:center;gap:8px;background:#2a3942;border-radius:10px;padding:9px 14px}
+.search input{background:none;border:none;padding:0;font-size:15px}
+.search span{color:var(--mut);font-size:16px}
+.tabs{display:flex;gap:8px}
+.tab{flex:1;text-align:center;font-size:13px;font-weight:600;color:var(--mut);background:#2a3942;padding:8px;border-radius:20px;cursor:pointer;transition:.15s}
+.tab.on{background:var(--green);color:#fff}
+.tab .n{font-size:11px;opacity:.85}
+/* LIST */
 .list{flex:1;overflow-y:auto}
-.item{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid #2a3942;cursor:pointer}
-.item:active{background:#2a3942}
-.av{width:46px;height:46px;border-radius:50%;background:#00a884;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
-.ci{flex:1;min-width:0}.cp{font-size:15px;font-weight:600}
-.cv{font-size:13px;color:#8696a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-.cc{font-size:12px;color:#8696a0;flex-shrink:0}
-.empty{padding:48px 20px;text-align:center;color:#8696a0}
-.msgs{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:5px}
-.msg{max-width:82%;padding:8px 12px;border-radius:8px;font-size:14.5px;line-height:1.5;word-break:break-word}
-.msg.u{align-self:flex-end;background:#005c4b;border-radius:8px 0 8px 8px}
-.msg.a{align-self:flex-start;background:#202c33;border-radius:0 8px 8px 8px}
-.who{font-size:11px;font-weight:600;margin-bottom:3px;color:#8696a0}
+.item{display:flex;align-items:center;gap:13px;padding:13px 16px;border-bottom:1px solid var(--line);cursor:pointer;transition:.12s;animation:fade .25s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.item:active{background:var(--line)}
+.av{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;flex-shrink:0;color:#fff}
+.ci{flex:1;min-width:0}
+.crow{display:flex;align-items:center;gap:6px}
+.cp{font-size:15.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.ctime{font-size:11px;color:var(--mut);flex-shrink:0}
+.cv{font-size:13px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.badges{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}
+.bdg{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px;background:#0e3a2f;color:#4fd3a8}
+.bdg.area{background:#10334d;color:#5cb3f0}
+.bdg.ok{background:#2a3942;color:var(--mut)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex-shrink:0}
+.empty{padding:60px 24px;text-align:center;color:var(--mut);font-size:14px}
+/* CHAT */
+.cbar{background:#0b2920;padding:8px 16px;font-size:12px;color:#7fd0b5;flex-shrink:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:6px;background:#0b141a}
+.msg{max-width:80%;padding:7px 11px 5px;border-radius:9px;font-size:14.5px;line-height:1.45;word-break:break-word;box-shadow:0 1px 1px rgba(0,0,0,.2);animation:fade .2s ease}
+.msg.u{align-self:flex-end;background:var(--green2)}
+.msg.a{align-self:flex-start;background:var(--panel)}
+.mt{font-size:10px;color:var(--mut);text-align:right;margin-top:2px}
+.who{font-size:11px;font-weight:700;margin-bottom:2px;color:#7fd0b5}
+.msg.u .who{color:#9fe0c8}
+.cact{flex-shrink:0;padding:10px 14px;background:var(--panel);display:flex;gap:10px}
+.cact button{margin:0}
+.btn-ok{background:var(--green)}.btn-undo{background:#2a3942}
+.daysep{align-self:center;background:#1d2a32;color:var(--mut);font-size:11px;padding:4px 12px;border-radius:10px;margin:6px 0}
 </style>
 </head>
 <body>
 <div id="login" class="screen active">
   <div class="box">
+    <div class="logo">AX</div>
     <h1>Ana</h1>
-    <p>Painel de conversas — Assis e Xavier Advogados</p>
-    <input type="password" id="pwd" placeholder="Senha" onkeydown="if(event.key==='Enter')auth()">
+    <p>Painel de Atendimentos · Assis Xavier Advogados</p>
+    <input type="password" id="pwd" placeholder="Senha de acesso" onkeydown="if(event.key==='Enter')auth()">
     <button onclick="auth()">Entrar</button>
     <div class="err" id="err"></div>
   </div>
 </div>
+
 <div id="list" class="screen">
   <div class="hdr">
-    <h2>Conversas</h2>
-    <span class="ref" onclick="load()" title="Atualizar">↻</span>
+    <div class="logo" style="width:40px;height:40px;font-size:17px;margin:0">AX</div>
+    <div class="ttl"><b>Atendimentos</b><span id="subt">—</span></div>
+    <span class="ref" onclick="load(1)" title="Atualizar">↻</span>
+  </div>
+  <div class="tools">
+    <div class="search"><span>🔍</span><input type="text" id="q" placeholder="Buscar por nome ou número" oninput="render()"></div>
+    <div class="tabs">
+      <div class="tab on" data-f="all" onclick="setTab('all')">Todas <span class="n" id="n-all"></span></div>
+      <div class="tab" data-f="open" onclick="setTab('open')">A tratar <span class="n" id="n-open"></span></div>
+      <div class="tab" data-f="done" onclick="setTab('done')">Tratadas <span class="n" id="n-done"></span></div>
+    </div>
   </div>
   <div class="list" id="lst"></div>
 </div>
+
 <div id="chat" class="screen">
   <div class="hdr">
     <span class="back" onclick="show('list')">‹</span>
-    <h2 id="ctitle"></h2>
+    <div class="av" id="cav" style="width:40px;height:40px;font-size:15px"></div>
+    <div class="ttl"><b id="ctitle"></b><span id="csub"></span></div>
   </div>
+  <div class="cbar" id="cbar" style="display:none"></div>
   <div class="msgs" id="cmsgs"></div>
+  <div class="cact"><button id="hbtn" onclick="toggleHandled()">Marcar como tratada</button></div>
 </div>
+
 <script>
-let tk=localStorage.getItem('ana_tk')||'',convs={};
+let tk=localStorage.getItem('ana_tk')||'',convs={},filter='all',current='';
+const COLORS=['#e57373','#64b5f6','#81c784','#ffb74d','#ba68c8','#4db6ac','#f06292','#7986cb','#a1887f','#90a4ae'];
+function color(ph){let s=0;for(let i=0;i<ph.length;i++)s+=ph.charCodeAt(i);return COLORS[s%COLORS.length];}
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function nm(c){return (c.meta&&c.meta.nome)?c.meta.nome:('+'+c.phone);}
+function initials(c){const n=(c.meta&&c.meta.nome)?c.meta.nome:c.phone;const p=n.trim().split(/\\s+/);return ((p[0]||'')[0]||'')+((p[1]||'')[0]||p[0].slice(-1)||'');}
+function fmtTime(ts){if(!ts)return '';const d=new Date(ts);return d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}
+function fmtDay(ts){if(!ts)return '';const d=new Date(ts),h=new Date(),y=new Date(Date.now()-864e5);
+  if(d.toDateString()===h.toDateString())return 'Hoje';
+  if(d.toDateString()===y.toDateString())return 'Ontem';
+  return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'});}
+
 async function auth(){
   const p=document.getElementById('pwd').value;
   const r=await fetch('/admin/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
@@ -838,35 +935,78 @@ async function auth(){
   else document.getElementById('err').textContent='Senha incorreta.';
 }
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
-async function load(){
+function setTab(f){filter=f;document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.f===f));render();}
+
+async function load(manual){
+  const el=document.getElementById('lst');
+  if(manual&&!Object.keys(convs).length)el.innerHTML='<div class="empty">Carregando…</div>';
   const r=await fetch('/admin/conversations',{headers:{'x-token':tk}});
   if(r.status===401){localStorage.removeItem('ana_tk');show('login');return;}
   convs=await r.json();render();
 }
+function counts(){let all=0,open=0,done=0;for(const k in convs){all++;convs[k].handled?done++:open++;}
+  document.getElementById('n-all').textContent=all;document.getElementById('n-open').textContent=open;document.getElementById('n-done').textContent=done;
+  document.getElementById('subt').textContent=all+' conversa'+(all!==1?'s':'');}
 function render(){
-  const el=document.getElementById('lst'),keys=Object.keys(convs);
-  if(!keys.length){el.innerHTML='<div class="empty">Nenhuma conversa ainda.</div>';return;}
+  counts();
+  const q=(document.getElementById('q').value||'').toLowerCase();
+  const el=document.getElementById('lst');
+  let keys=Object.keys(convs).sort((a,b)=>new Date(convs[b].updated_at||0)-new Date(convs[a].updated_at||0));
+  keys=keys.filter(ph=>{
+    const c=convs[ph];
+    if(filter==='open'&&c.handled)return false;
+    if(filter==='done'&&!c.handled)return false;
+    if(q){const hay=(ph+' '+nm(c)+' '+(c.meta&&c.meta.area||'')).toLowerCase();if(!hay.includes(q))return false;}
+    return true;
+  });
+  if(!keys.length){el.innerHTML='<div class="empty">Nenhuma conversa encontrada.</div>';return;}
   el.innerHTML=keys.map(ph=>{
-    const ms=convs[ph],last=ms[ms.length-1];
-    const prev=last?esc(last.text.substring(0,55)):'';
+    const c=convs[ph],ms=c.messages,last=ms[ms.length-1];
+    const prev=last?(last.role==='user'?'':'Ana: ')+esc(last.text.substring(0,48)):'';
+    const area=c.meta&&c.meta.area?\`<span class="bdg area">\${esc(c.meta.area)}</span>\`:'';
+    const esp=c.meta&&c.meta.especialista?\`<span class="bdg">\${esc(c.meta.especialista)}</span>\`:'';
+    const done=c.handled?'<span class="bdg ok">✓ tratada</span>':'';
     return \`<div class="item" onclick="openChat('\${ph}')">
-      <div class="av">\${ph.slice(-2)}</div>
-      <div class="ci"><div class="cp">+\${ph}</div><div class="cv">\${prev}</div></div>
-      <div class="cc">\${ms.length} msgs</div>
+      <div class="av" style="background:\${color(ph)}">\${esc(initials(c)).toUpperCase()}</div>
+      <div class="ci">
+        <div class="crow"><div class="cp">\${esc(nm(c))}</div><div class="ctime">\${fmtDay(c.updated_at)}</div></div>
+        <div class="cv">\${prev}</div>
+        <div class="badges">\${area}\${esp}\${done}\${!c.handled?'<span class="dot"></span>':''}</div>
+      </div>
     </div>\`;
   }).join('');
 }
 function openChat(ph){
-  document.getElementById('ctitle').textContent='+'+ph;
-  const ms=convs[ph]||[],el=document.getElementById('cmsgs');
-  el.innerHTML=ms.map(m=>\`<div class="msg \${m.role==='user'?'u':'a'}">
-    <div class="who">\${m.role==='user'?'Cliente':'Ana'}</div>
-    \${esc(m.text)}
-  </div>\`).join('');
+  current=ph;const c=convs[ph],ms=c.messages;
+  document.getElementById('ctitle').textContent=nm(c);
+  document.getElementById('csub').textContent='+'+ph;
+  const av=document.getElementById('cav');av.textContent=initials(c).toUpperCase();av.style.background=color(ph);
+  const bar=document.getElementById('cbar');
+  if(c.meta){bar.style.display='flex';bar.innerHTML=
+    (c.meta.area?\`<b>\${esc(c.meta.area)}</b>\`:'')+
+    (c.meta.especialista?\`· \${esc(c.meta.especialista)}\`:'')+
+    (c.meta.horario?\`· ⏰ \${esc(c.meta.horario)}\`:'');}
+  else bar.style.display='none';
+  const el=document.getElementById('cmsgs');let lastDay='';
+  el.innerHTML=ms.map(m=>{
+    let sep='';const day=fmtDay(m.ts);
+    if(day&&day!==lastDay){lastDay=day;sep=\`<div class="daysep">\${day}</div>\`;}
+    return sep+\`<div class="msg \${m.role==='user'?'u':'a'}">
+      <div class="who">\${m.role==='user'?'Cliente':'Ana'}</div>
+      \${esc(m.text)}\${m.ts?\`<div class="mt">\${fmtTime(m.ts)}</div>\`:''}
+    </div>\`;
+  }).join('');
+  updHBtn();
   show('chat');
   setTimeout(()=>el.scrollTop=el.scrollHeight,60);
 }
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function updHBtn(){const c=convs[current],b=document.getElementById('hbtn');
+  if(c&&c.handled){b.textContent='↩ Reabrir';b.className='btn-undo';}
+  else{b.textContent='✓ Marcar como tratada';b.className='btn-ok';}}
+async function toggleHandled(){
+  const c=convs[current];const nv=!c.handled;c.handled=nv;updHBtn();
+  await fetch('/admin/handled',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:current,handled:nv})});
+}
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
 if(tk){show('list');load();}
 <\/script>
@@ -892,24 +1032,51 @@ app.get('/admin/conversations', async (req, res) => {
   const result = {};
   const onlyText = (msgs) => msgs
     .filter(m => typeof m.content === 'string' && m.content.trim())
-    .map(m => ({ role: m.role, text: m.content }));
+    .map(m => ({ role: m.role, text: m.content, ts: m.ts || null }));
 
   // Fonte principal: arquivo permanente no Supabase
   const rows = await supabaseGetAll();
   if (rows) {
     for (const row of rows) {
       const textMsgs = onlyText(row.messages || []);
-      if (textMsgs.length > 0) result[row.phone] = textMsgs;
+      if (textMsgs.length > 0) {
+        result[row.phone] = {
+          messages: textMsgs,
+          meta: row.meta || conversationMeta[row.phone] || null,
+          handled: !!row.handled,
+          updated_at: row.updated_at || null
+        };
+      }
     }
   }
 
   // Complementa com o que esta na memoria (conversas ativas ainda nao arquivadas)
   for (const [phone, msgs] of Object.entries(conversationHistory)) {
     const textMsgs = onlyText(msgs);
-    if (textMsgs.length > 0) result[phone] = textMsgs;
+    if (textMsgs.length > 0) {
+      const existing = result[phone] || {};
+      result[phone] = {
+        messages: textMsgs,
+        meta: conversationMeta[phone] || existing.meta || null,
+        handled: existing.handled || false,
+        updated_at: new Date().toISOString()
+      };
+    }
   }
 
   res.json(result);
+});
+
+// Marca conversa como tratada / nao tratada
+app.post('/admin/handled', async (req, res) => {
+  const token = req.headers['x-token'];
+  if (!ADMIN_PASSWORD || token !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { phone, handled } = req.body || {};
+  if (!phone) return res.status(400).json({ error: 'phone obrigatorio' });
+  const ok = await supabasePatch(phone, { handled: !!handled });
+  res.json({ success: ok });
 });
 
 app.get('/health', (req, res) => {
