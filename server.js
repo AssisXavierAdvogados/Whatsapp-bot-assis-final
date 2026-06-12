@@ -96,6 +96,10 @@ async function supabaseGetAll() {
 // Metadados da conversa (nome, area, especialista) capturados ao notificar
 const conversationMeta = {};
 
+// Status real de entrega vindo do Meta (delivered/read/failed), indexado pelo wamid.
+// Permite saber se uma notificacao REALMENTE chegou, e nao so se foi aceita na fila.
+const deliveryStatus = {};
+
 // Salva no arquivo local E arquiva o numero no Supabase
 function persist(userId) {
   saveHistory(conversationHistory);
@@ -796,6 +800,12 @@ app.post('/webhook', async (req, res) => {
     const statuses = change?.statuses;
     if (statuses && statuses.length) {
       for (const st of statuses) {
+        deliveryStatus[st.id] = {
+          status: st.status,
+          recipient: st.recipient_id,
+          errors: st.errors || null,
+          ts: new Date().toISOString()
+        };
         if (st.status === 'failed') {
           console.error(`[Entrega] FALHOU para +${st.recipient_id}:`, JSON.stringify(st.errors || st));
         } else {
@@ -1091,11 +1101,18 @@ async function testNotify(){
     const r=await fetch('/admin/test-notify',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:phone})});
     d=await r.json();
   }catch(e){alert('Erro de conexão: '+e.message);return;}
+  const ent=d.entrega||{};
+  function linha(nome,env,key){
+    if(!env)return nome+': sem dados\\n';
+    if(!env.ok)return nome+': ❌ REJEITADO pelo Meta — '+JSON.stringify(env.error)+'\\n';
+    const e=ent[key];
+    if(!e||e.status==='sem_retorno')return nome+': ⏳ aceito, aguardando confirmação de entrega…\\n';
+    if(e.status==='failed')return nome+': ❌ NÃO ENTREGUE — '+JSON.stringify(e.errors)+'\\n';
+    return nome+': ✅ ENTREGUE ('+e.status+')\\n';
+  }
   let msg='📲 Destino: +'+d.target+'\\n\\n';
-  if(d.template&&d.template.ok)msg+='✅ TEMPLATE: Meta aceitou (ID '+d.template.id+').\\nSe não chegou no WhatsApp, o problema é do lado do número (não recebe template).\\n\\n';
-  else msg+='❌ TEMPLATE FALHOU:\\n'+(d.template?JSON.stringify(d.template.error):'sem resposta')+'\\n\\n';
-  if(d.texto&&d.texto.ok)msg+='✅ TEXTO livre: enviado (janela 24h aberta).';
-  else msg+='⚠️ TEXTO livre falhou (normal se a pessoa não respondeu nas últimas 24h):\\n'+(d.texto?JSON.stringify(d.texto.error):'sem resposta');
+  msg+=linha('🔔 TEMPLATE (vale fora das 24h)',d.template,'template')+'\\n';
+  msg+=linha('💬 TEXTO livre (só dentro das 24h)',d.texto,'texto');
   alert(msg);
 }
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
@@ -1225,6 +1242,18 @@ app.post('/admin/test-notify', async (req, res) => {
     out.texto = { ok: true, id: r.data.messages?.[0]?.id };
   } catch (e) {
     out.texto = { ok: false, error: e.response?.data?.error || e.message };
+  }
+
+  // Aguarda o Meta devolver o STATUS REAL de entrega (chega por webhook em segundos).
+  // wamid aceito != entregue. Aqui descobrimos se chegou de verdade.
+  const wamids = [out.template?.id, out.texto?.id].filter(Boolean);
+  if (wamids.length) {
+    out.entrega = {};
+    for (let i = 0; i < 8 && wamids.some(id => !deliveryStatus[id]); i++) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    if (out.template?.id) out.entrega.template = deliveryStatus[out.template.id] || { status: 'sem_retorno' };
+    if (out.texto?.id) out.entrega.texto = deliveryStatus[out.texto.id] || { status: 'sem_retorno' };
   }
 
   console.log('[Teste] Resultado para', target, JSON.stringify(out));
