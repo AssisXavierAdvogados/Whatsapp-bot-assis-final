@@ -29,3 +29,7 @@ services:
         sync: false
       - key: TEMPLATE_LANG
         value: pt_BR
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false

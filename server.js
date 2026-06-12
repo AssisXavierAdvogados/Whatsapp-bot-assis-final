@@ -30,6 +30,53 @@ function saveHistory(history) {
   } catch (e) {}
 }
 
+// === Supabase: arquivo permanente das conversas (sobrevive a restart) ===
+function supabaseEnabled() {
+  return !!(SUPABASE_URL && SUPABASE_KEY);
+}
+
+// Grava (upsert) a conversa de um numero. Fire-and-forget: nao trava a resposta.
+async function supabaseUpsert(phone, messages) {
+  if (!supabaseEnabled() || !phone || !Array.isArray(messages)) return;
+  try {
+    await axios.post(
+      `${SUPABASE_URL}/rest/v1/conversations`,
+      { phone, messages, updated_at: new Date().toISOString() },
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates'
+        }
+      }
+    );
+  } catch (e) {
+    console.error('[Supabase] Erro ao gravar:', e.response?.data || e.message);
+  }
+}
+
+// Le todas as conversas arquivadas (para o painel /admin)
+async function supabaseGetAll() {
+  if (!supabaseEnabled()) return null;
+  try {
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?select=phone,messages,updated_at&order=updated_at.desc`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    return r.data;
+  } catch (e) {
+    console.error('[Supabase] Erro ao ler:', e.response?.data || e.message);
+    return null;
+  }
+}
+
+// Salva no arquivo local E arquiva o numero no Supabase
+function persist(userId) {
+  saveHistory(conversationHistory);
+  supabaseUpsert(userId, conversationHistory[userId]);
+}
+
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
@@ -39,6 +86,8 @@ const EMAIL_FROM = process.env.GMAIL_USER; // remetente (email verificado no Bre
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const LEAD_TEMPLATE_NAME = process.env.LEAD_TEMPLATE_NAME; // ex: novo_lead (aprovado no Meta)
 const TEMPLATE_LANG = process.env.TEMPLATE_LANG || 'pt_BR';
+const SUPABASE_URL = process.env.SUPABASE_URL;   // ex: https://xxxx.supabase.co
+const SUPABASE_KEY = process.env.SUPABASE_KEY;   // secret key do Supabase
 
 const SPECIALISTS = {
   trabalhista:    { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087', email: 'rafaelpinhatti_adv@hotmail.com' },
@@ -428,7 +477,7 @@ async function callClaudeAPI(userMessage, userId) {
     if (conversationHistory[userId].length > 40) {
       conversationHistory[userId] = conversationHistory[userId].slice(-40);
     }
-    saveHistory(conversationHistory);
+    persist(userId);
 
     return extractText(response.data.content);
 
@@ -676,7 +725,7 @@ app.post('/webhook', async (req, res) => {
         delete pendingMessages[senderNumber];
         if (!conversationHistory[senderNumber]) conversationHistory[senderNumber] = [];
         conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n') });
-        saveHistory(conversationHistory);
+        persist(senderNumber);
       }
 
       console.log(`[Webhook] ${message.type} recebido de ${senderNumber}`);
@@ -834,18 +883,32 @@ app.post('/admin/auth', (req, res) => {
   res.json({ success: true, token: ADMIN_PASSWORD });
 });
 
-app.get('/admin/conversations', (req, res) => {
+app.get('/admin/conversations', async (req, res) => {
   const token = req.headers['x-token'];
   if (!ADMIN_PASSWORD || token !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
   const result = {};
-  for (const [phone, msgs] of Object.entries(conversationHistory)) {
-    const textMsgs = msgs.filter(m => typeof m.content === 'string' && m.content.trim());
-    if (textMsgs.length > 0) {
-      result[phone] = textMsgs.map(m => ({ role: m.role, text: m.content }));
+  const onlyText = (msgs) => msgs
+    .filter(m => typeof m.content === 'string' && m.content.trim())
+    .map(m => ({ role: m.role, text: m.content }));
+
+  // Fonte principal: arquivo permanente no Supabase
+  const rows = await supabaseGetAll();
+  if (rows) {
+    for (const row of rows) {
+      const textMsgs = onlyText(row.messages || []);
+      if (textMsgs.length > 0) result[row.phone] = textMsgs;
     }
   }
+
+  // Complementa com o que esta na memoria (conversas ativas ainda nao arquivadas)
+  for (const [phone, msgs] of Object.entries(conversationHistory)) {
+    const textMsgs = onlyText(msgs);
+    if (textMsgs.length > 0) result[phone] = textMsgs;
+  }
+
   res.json(result);
 });
 
@@ -864,6 +927,7 @@ app.get('/health', (req, res) => {
       BREVO_API_KEY: BREVO_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
       LEAD_TEMPLATE_NAME: LEAD_TEMPLATE_NAME ? LEAD_TEMPLATE_NAME : 'NAO DEFINIDO',
       TEMPLATE_LANG: TEMPLATE_LANG,
+      SUPABASE: supabaseEnabled() ? 'conectado' : 'NAO DEFINIDO',
       VERIFY_TOKEN: VERIFY_TOKEN
     }
   });
