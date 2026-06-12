@@ -127,6 +127,10 @@ const SPECIALISTS = {
   previdenciario: { name: 'Dra. Aline Xavier',         phone: '5544991651532', email: 'alinex.assis@gmail.com' },
 };
 
+// Admin do escritorio: recebe copia de TODOS os atendimentos notificados
+const ADMIN_PHONE = '5544999784442';
+const ADMIN_EMAIL = 'willianr.assis@outlook.com';
+
 const OFFICE_CONTEXT = `
 Voce e Ana, atendente do Assis e Xavier Advogados, escritorio juridico full service em Maringa, Parana.
 
@@ -302,28 +306,26 @@ function buildSystemPrompt(userId) {
     `ULTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
 }
 
-async function sendEmailToSpecialist(toEmail, subject, htmlBody) {
+async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null) {
   if (!BREVO_API_KEY || !EMAIL_FROM) {
     console.log('[Email] Credenciais nao configuradas, pulando envio.');
     return;
   }
   try {
-    await axios.post(
-      'https://api.brevo.com/v3/smtp/email',
-      {
-        sender: { name: 'Ana - Assis e Xavier Advogados', email: EMAIL_FROM },
-        to: [{ email: toEmail }],
-        subject,
-        htmlContent: htmlBody
-      },
-      {
-        headers: {
-          'api-key': BREVO_API_KEY,
-          'content-type': 'application/json'
-        }
-      }
-    );
-    console.log(`[Email] Enviado para ${toEmail} via Brevo`);
+    const payload = {
+      sender: { name: 'Ana - Assis e Xavier Advogados', email: EMAIL_FROM },
+      to: [{ email: toEmail }],
+      subject,
+      htmlContent: htmlBody
+    };
+    if (ccEmail && ccEmail !== toEmail) {
+      payload.cc = [{ email: ccEmail }];
+    }
+    await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+      headers: { 'api-key': BREVO_API_KEY, 'content-type': 'application/json' }
+    });
+    const ccInfo = ccEmail && ccEmail !== toEmail ? ` (CC: ${ccEmail})` : '';
+    console.log(`[Email] Enviado para ${toEmail}${ccInfo} via Brevo`);
   } catch (e) {
     console.error('[Email] Erro ao enviar:', e.response?.data || e.message);
   }
@@ -386,11 +388,42 @@ async function executeTool(toolName, toolInput, clientPhone) {
     }
 
     // 3) Email — garantia que sempre chega
+    // Se o especialista nao for o admin, envia copia para o admin
+    const emailCc = specialist.email !== ADMIN_EMAIL ? ADMIN_EMAIL : null;
     await sendEmailToSpecialist(
       specialist.email,
       `Novo Atendimento - ${areaLabel} | ${nome_cliente}`,
-      emailHtml
+      emailHtml,
+      emailCc
     );
+
+    // 4) Copia para o admin no WhatsApp quando o especialista e outro (Rafael ou Aline)
+    if (specialist.phone !== ADMIN_PHONE) {
+      const adminCopyMsg =
+        `📋 *CÓPIA - Novo Atendimento ${areaLabel}*\n\n` +
+        `👤 *Cliente:* ${nome_cliente}\n` +
+        `📱 *WhatsApp:* +${clientPhone}\n` +
+        `⏰ *Melhor horário:* ${horario_preferido}\n` +
+        `👨‍⚖️ *Especialista notificado:* ${specialist.name}\n\n` +
+        `📋 *Resumo:* ${resumo_caso.substring(0, 400)}\n\n` +
+        `_Se ${specialist.name} não retornar, contate-o diretamente._`;
+
+      const adminTemplateOk = await sendWhatsAppTemplate(ADMIN_PHONE, [
+        `Cópia - ${areaLabel}`,
+        nome_cliente,
+        `+${clientPhone}`,
+        horario_preferido,
+        `Notifiquei ${specialist.name}. ${resumo_caso}`
+      ]);
+      if (!adminTemplateOk) {
+        try {
+          await sendWhatsAppMessage(ADMIN_PHONE, adminCopyMsg);
+        } catch (e) {
+          console.error('[Admin] Erro ao enviar copia:', e.message);
+        }
+      }
+      console.log(`[Admin] Copia enviada para Dr. Willian sobre atendimento ${areaLabel} de ${nome_cliente}`);
+    }
 
     // Limpa historico apos 3h para que o admin consiga ver a conversa completa
     setTimeout(() => {
@@ -445,11 +478,36 @@ async function executeTool(toolName, toolInput, clientPhone) {
     }
 
     // 3) Email — garantia
+    const emailCcL = specialist.email !== ADMIN_EMAIL ? ADMIN_EMAIL : null;
     await sendEmailToSpecialist(
       specialist.email,
       `Lembrete Urgente - ${nome_cliente} aguarda seu contato`,
-      emailHtml
+      emailHtml,
+      emailCcL
     );
+
+    // 4) Copia para o admin no WhatsApp quando o especialista e outro (Rafael ou Aline)
+    if (specialist.phone !== ADMIN_PHONE) {
+      const adminLembreteMsg =
+        `⏰ *LEMBRETE - Cliente aguardando ${specialist.name}*\n\n` +
+        `👤 *Cliente:* ${nome_cliente}\n` +
+        `📱 *WhatsApp:* +${clientPhone}\n\n` +
+        `Cliente informou que ainda nao foi contatado por ${specialist.name}. Por favor, verifique.`;
+
+      const adminTplOk = await sendWhatsAppTemplate(ADMIN_PHONE, [
+        `LEMBRETE (${area.toUpperCase().replace('_', '/')})`,
+        nome_cliente,
+        `+${clientPhone}`,
+        '-',
+        `Cliente aguarda retorno de ${specialist.name}.`
+      ]);
+      if (!adminTplOk) {
+        try {
+          await sendWhatsAppMessage(ADMIN_PHONE, adminLembreteMsg);
+        } catch (e) {}
+      }
+      console.log(`[Admin] Copia de lembrete enviada para Dr. Willian - ${nome_cliente}`);
+    }
 
     return `Lembrete reenviado para ${specialist.name}.`;
   }
