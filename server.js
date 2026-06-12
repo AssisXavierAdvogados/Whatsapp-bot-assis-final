@@ -942,7 +942,9 @@ async function load(manual){
   if(manual&&!Object.keys(convs).length)el.innerHTML='<div class="empty">Carregando…</div>';
   const r=await fetch('/admin/conversations',{headers:{'x-token':tk}});
   if(r.status===401){localStorage.removeItem('ana_tk');show('login');return;}
-  convs=await r.json();render();
+  convs=await r.json();
+  for(const ph in convs)convs[ph].phone=ph;
+  render();
 }
 function counts(){let all=0,open=0,done=0;for(const k in convs){all++;convs[k].handled?done++:open++;}
   document.getElementById('n-all').textContent=all;document.getElementById('n-open').textContent=open;document.getElementById('n-done').textContent=done;
