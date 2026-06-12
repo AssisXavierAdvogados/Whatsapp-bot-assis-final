@@ -790,6 +790,21 @@ app.post('/webhook', async (req, res) => {
   try {
     const entry = req.body?.entry?.[0];
     const change = entry?.changes?.[0]?.value;
+
+    // Status de entrega (sent / delivered / read / FAILED). Revela porque uma
+    // notificacao ao especialista nao chegou, com o codigo de erro do Meta.
+    const statuses = change?.statuses;
+    if (statuses && statuses.length) {
+      for (const st of statuses) {
+        if (st.status === 'failed') {
+          console.error(`[Entrega] FALHOU para +${st.recipient_id}:`, JSON.stringify(st.errors || st));
+        } else {
+          console.log(`[Entrega] +${st.recipient_id}: ${st.status}`);
+        }
+      }
+      return;
+    }
+
     const messages = change?.messages;
 
     if (!messages || messages.length === 0) return;
@@ -949,6 +964,7 @@ button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:
   <div class="hdr">
     <div class="logo" style="width:40px;height:40px;font-size:17px;margin:0">AX</div>
     <div class="ttl"><b>Atendimentos</b><span id="subt">—</span></div>
+    <span class="ref" onclick="testNotify()" title="Testar notificação">🔧</span>
     <span class="ref" onclick="load(1)" title="Atualizar">↻</span>
   </div>
   <div class="tools">
@@ -1067,6 +1083,21 @@ async function toggleHandled(){
   const c=convs[current];const nv=!c.handled;c.handled=nv;updHBtn();
   await fetch('/admin/handled',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:current,handled:nv})});
 }
+async function testNotify(){
+  const phone=prompt('Testar envio de notificação para qual número?\\n\\nDigite com 55 e DDD (ex: 5544991651532).\\nDeixe em branco para enviar ao Dr. Willian.');
+  if(phone===null)return;
+  let d;
+  try{
+    const r=await fetch('/admin/test-notify',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:phone})});
+    d=await r.json();
+  }catch(e){alert('Erro de conexão: '+e.message);return;}
+  let msg='📲 Destino: +'+d.target+'\\n\\n';
+  if(d.template&&d.template.ok)msg+='✅ TEMPLATE: Meta aceitou (ID '+d.template.id+').\\nSe não chegou no WhatsApp, o problema é do lado do número (não recebe template).\\n\\n';
+  else msg+='❌ TEMPLATE FALHOU:\\n'+(d.template?JSON.stringify(d.template.error):'sem resposta')+'\\n\\n';
+  if(d.texto&&d.texto.ok)msg+='✅ TEXTO livre: enviado (janela 24h aberta).';
+  else msg+='⚠️ TEXTO livre falhou (normal se a pessoa não respondeu nas últimas 24h):\\n'+(d.texto?JSON.stringify(d.texto.error):'sem resposta');
+  alert(msg);
+}
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
 if(tk){show('list');load();}
 <\/script>
@@ -1137,6 +1168,67 @@ app.post('/admin/handled', async (req, res) => {
   if (!phone) return res.status(400).json({ error: 'phone obrigatorio' });
   const ok = await supabasePatch(phone, { handled: !!handled });
   res.json({ success: ok });
+});
+
+// Diagnostico: envia uma notificacao de teste e devolve a resposta CRUA do Meta.
+// Permite ver na hora o motivo exato de uma falha de entrega de template.
+app.post('/admin/test-notify', async (req, res) => {
+  const token = req.headers['x-token'];
+  if (!ADMIN_PASSWORD || token !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const target = (req.body?.phone || '').replace(/\D/g, '') || ADMIN_PHONE;
+  const out = { target, config: {
+    PHONE_NUMBER_ID: PHONE_NUMBER_ID ? 'ok' : 'FALTANDO',
+    WHATSAPP_TOKEN: WHATSAPP_TOKEN ? 'ok' : 'FALTANDO',
+    LEAD_TEMPLATE_NAME: LEAD_TEMPLATE_NAME || 'FALTANDO',
+    TEMPLATE_LANG
+  }, template: null, texto: null };
+
+  // 1) Tenta o TEMPLATE e captura a resposta/erro cru
+  try {
+    const r = await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: target,
+        type: 'template',
+        template: {
+          name: LEAD_TEMPLATE_NAME,
+          language: { code: TEMPLATE_LANG },
+          components: [{
+            type: 'body',
+            parameters: [
+              { type: 'text', text: 'TESTE' },
+              { type: 'text', text: 'Cliente Teste' },
+              { type: 'text', text: '+5544000000000' },
+              { type: 'text', text: 'Agora' },
+              { type: 'text', text: 'Mensagem de teste de entrega do template novo_lead.' }
+            ]
+          }]
+        }
+      },
+      { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+    out.template = { ok: true, id: r.data.messages?.[0]?.id };
+  } catch (e) {
+    out.template = { ok: false, error: e.response?.data?.error || e.message };
+  }
+
+  // 2) Tenta TEXTO livre (so entrega se houver janela de 24h aberta)
+  try {
+    const r = await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      { messaging_product: 'whatsapp', to: target, type: 'text', text: { body: '🔧 Teste de entrega Ana (texto livre).' } },
+      { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+    out.texto = { ok: true, id: r.data.messages?.[0]?.id };
+  } catch (e) {
+    out.texto = { ok: false, error: e.response?.data?.error || e.message };
+  }
+
+  console.log('[Teste] Resultado para', target, JSON.stringify(out));
+  res.json(out);
 });
 
 app.get('/health', (req, res) => {
