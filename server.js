@@ -4,7 +4,6 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
-const nodemailer = require('nodemailer');
 
 dotenv.config();
 
@@ -36,8 +35,8 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
-const GMAIL_USER = process.env.GMAIL_USER;
-const GMAIL_PASS = process.env.GMAIL_PASS;
+const EMAIL_FROM = process.env.GMAIL_USER; // remetente (email verificado no Brevo)
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const LEAD_TEMPLATE_NAME = process.env.LEAD_TEMPLATE_NAME; // ex: novo_lead (aprovado no Meta)
 const TEMPLATE_LANG = process.env.TEMPLATE_LANG || 'pt_BR';
 
@@ -229,24 +228,29 @@ function buildSystemPrompt(userId) {
 }
 
 async function sendEmailToSpecialist(toEmail, subject, htmlBody) {
-  if (!GMAIL_USER || !GMAIL_PASS) {
+  if (!BREVO_API_KEY || !EMAIL_FROM) {
     console.log('[Email] Credenciais nao configuradas, pulando envio.');
     return;
   }
   try {
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: GMAIL_USER, pass: GMAIL_PASS }
-    });
-    await transporter.sendMail({
-      from: `"Ana - Assis e Xavier Advogados" <${GMAIL_USER}>`,
-      to: toEmail,
-      subject,
-      html: htmlBody
-    });
-    console.log(`[Email] Enviado para ${toEmail}`);
+    await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      {
+        sender: { name: 'Ana - Assis e Xavier Advogados', email: EMAIL_FROM },
+        to: [{ email: toEmail }],
+        subject,
+        htmlContent: htmlBody
+      },
+      {
+        headers: {
+          'api-key': BREVO_API_KEY,
+          'content-type': 'application/json'
+        }
+      }
+    );
+    console.log(`[Email] Enviado para ${toEmail} via Brevo`);
   } catch (e) {
-    console.error('[Email] Erro ao enviar:', e.message);
+    console.error('[Email] Erro ao enviar:', e.response?.data || e.message);
   }
 }
 
@@ -856,7 +860,8 @@ app.get('/health', (req, res) => {
       WHATSAPP_TOKEN: WHATSAPP_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
       PHONE_NUMBER_ID: PHONE_NUMBER_ID ? `${PHONE_NUMBER_ID.slice(0, 6)}...` : 'NAO DEFINIDO',
       CLAUDE_API_KEY: CLAUDE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
-      GMAIL_USER: GMAIL_USER ? GMAIL_USER : 'NAO DEFINIDO',
+      EMAIL_FROM: EMAIL_FROM ? EMAIL_FROM : 'NAO DEFINIDO',
+      BREVO_API_KEY: BREVO_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
       LEAD_TEMPLATE_NAME: LEAD_TEMPLATE_NAME ? LEAD_TEMPLATE_NAME : 'NAO DEFINIDO',
       TEMPLATE_LANG: TEMPLATE_LANG,
       VERIFY_TOKEN: VERIFY_TOKEN

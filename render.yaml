@@ -23,7 +23,7 @@ services:
         sync: false
       - key: GMAIL_USER
         sync: false
-      - key: GMAIL_PASS
+      - key: BREVO_API_KEY
         sync: false
       - key: LEAD_TEMPLATE_NAME
         sync: false
