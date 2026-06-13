@@ -1093,29 +1093,8 @@ async function toggleHandled(){
   const c=convs[current];const nv=!c.handled;c.handled=nv;updHBtn();
   await fetch('/admin/handled',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:current,handled:nv})});
 }
-async function testNotify(){
-  const phone='';
-  let d;
-  try{
-    const r=await fetch('/admin/test-notify',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:phone})});
-    d=await r.json();
-  }catch(e){alert('Erro de conexão: '+e.message);return;}
-  const ent=d.entrega||{};
-  function linha(nome,env,key){
-    if(!env)return nome+': sem dados\\n';
-    if(!env.ok)return nome+': ❌ REJEITADO pelo Meta — '+JSON.stringify(env.error)+'\\n';
-    const e=ent[key];
-    if(!e||e.status==='sem_retorno')return nome+': ⏳ aceito, aguardando confirmação de entrega…\\n';
-    if(e.status==='failed')return nome+': ❌ NÃO ENTREGUE — '+JSON.stringify(e.errors)+'\\n';
-    return nome+': ✅ ENTREGUE ('+e.status+')\\n';
-  }
-  let msg='📲 Destino: +'+d.target+'\\n\\n';
-  msg+=linha('🔔 TEMPLATE (vale fora das 24h)',d.template,'template')+'\\n';
-  msg+=linha('💬 TEXTO livre (só dentro das 24h)',d.texto,'texto')+'\\n\\n';
-  if(d.email&&d.email.ok)msg+='📧 EMAIL: ✅ Enviado para '+d.email.to+' (de '+d.email.from+')';
-  else if(d.email)msg+='📧 EMAIL: ❌ Falhou — '+JSON.stringify(d.email.error);
-  else msg+='📧 EMAIL: sem dados';
-  alert(msg);
+function testNotify(){
+  window.open('/admin/test-notify-page?token='+encodeURIComponent(tk),'_blank');
 }
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
 if(tk){show('list');load();}
@@ -1300,6 +1279,67 @@ app.get('/health', (req, res) => {
       VERIFY_TOKEN: VERIFY_TOKEN
     }
   });
+});
+
+// Pagina de teste acessivel diretamente pelo navegador (sem fetch/JS)
+app.get('/admin/test-notify-page', async (req, res) => {
+  if (!ADMIN_PASSWORD || req.query.token !== ADMIN_PASSWORD) {
+    return res.status(401).send('Acesso negado.');
+  }
+  const target = SPECIALISTS.imobiliario.phone;
+  const emailTarget = SPECIALISTS.imobiliario.email;
+  let html = `<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>body{font-family:Arial,sans-serif;padding:20px;background:#0b141a;color:#e9edef}
+  .ok{color:#00a884}.err{color:#ef4444}.wait{color:#ffb74d}
+  h2{color:#00a884}pre{background:#202c33;padding:12px;border-radius:8px;font-size:12px;overflow-x:auto}</style></head>
+  <body><h2>🔧 Teste de Notificações</h2>`;
+
+  // WhatsApp template
+  let templateId = null;
+  try {
+    const r = await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      { messaging_product:'whatsapp', to:target, type:'template', template:{
+        name:LEAD_TEMPLATE_NAME, language:{code:TEMPLATE_LANG},
+        components:[{type:'body',parameters:[
+          {type:'text',text:'TESTE'},{type:'text',text:'Cliente Teste'},
+          {type:'text',text:'+5544000000000'},{type:'text',text:'Agora'},
+          {type:'text',text:'Mensagem de teste.'}
+        ]}]
+      }},
+      { headers:{ Authorization:`Bearer ${WHATSAPP_TOKEN}`, 'Content-Type':'application/json' } }
+    );
+    templateId = r.data.messages?.[0]?.id;
+    html += `<p class="ok">✅ TEMPLATE WhatsApp: aceito pelo Meta (ID: ${templateId})</p>`;
+  } catch(e) {
+    html += `<p class="err">❌ TEMPLATE WhatsApp: FALHOU<br><pre>${JSON.stringify(e.response?.data?.error||e.message,null,2)}</pre></p>`;
+  }
+
+  // Aguarda status real
+  if (templateId) {
+    for (let i = 0; i < 8 && !deliveryStatus[templateId]; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    const st = deliveryStatus[templateId];
+    if (!st) html += `<p class="wait">⏳ Status de entrega: aguardando… (normal, pode levar segundos)</p>`;
+    else if (st.status === 'failed') html += `<p class="err">❌ TEMPLATE NÃO ENTREGUE:<br><pre>${JSON.stringify(st.errors,null,2)}</pre></p>`;
+    else html += `<p class="ok">✅ TEMPLATE ENTREGUE: ${st.status}</p>`;
+  }
+
+  // Email
+  try {
+    await sendEmailToSpecialist(emailTarget,
+      '🔧 Teste de entrega — Ana Assis Xavier Advogados',
+      `<div style="font-family:Arial;padding:20px"><h2 style="color:#1a5276">✅ Email funcionando!</h2>
+      <p>Remetente: <b>${EMAIL_FROM}</b></p><p>Horário: ${new Date().toLocaleString('pt-BR')}</p></div>`
+    );
+    html += `<p class="ok">✅ EMAIL: enviado para ${emailTarget} (de ${EMAIL_FROM||'não configurado'})</p>`;
+  } catch(e) {
+    html += `<p class="err">❌ EMAIL: falhou — ${e.message}</p>`;
+  }
+
+  html += `<br><a href="/admin" style="color:#00a884">← Voltar ao painel</a></body></html>`;
+  res.send(html);
 });
 
 app.listen(PORT, () => {
