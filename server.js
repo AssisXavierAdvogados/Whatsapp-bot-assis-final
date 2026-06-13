@@ -93,8 +93,20 @@ async function supabaseGetAll() {
   }
 }
 
-// Metadados da conversa (nome, area, especialista) capturados ao notificar
-const conversationMeta = {};
+// Carrega historico de um numero especifico do Supabase (lazy, sob demanda)
+async function supabaseLoadOne(phone) {
+  if (!supabaseEnabled() || !phone) return null;
+  try {
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?phone=eq.${encodeURIComponent(phone)}&select=messages,meta`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (r.data && r.data.length > 0) return r.data[0];
+  } catch (e) {
+    console.error('[Supabase] Erro ao carregar histórico individual:', e.message);
+  }
+  return null;
+}
 
 // Status real de entrega vindo do Meta (delivered/read/failed), indexado pelo wamid.
 // Permite saber se uma notificacao REALMENTE chegou, e nao so se foi aceita na fila.
@@ -522,7 +534,16 @@ async function executeTool(toolName, toolInput, clientPhone) {
 async function callClaudeAPI(userMessage, userId) {
   try {
     if (!conversationHistory[userId]) {
-      conversationHistory[userId] = [];
+      // Tenta restaurar do Supabase antes de comecar do zero.
+      // Evita perder historico apos restart do servidor.
+      const saved = await supabaseLoadOne(userId);
+      if (saved && Array.isArray(saved.messages) && saved.messages.length > 0) {
+        conversationHistory[userId] = saved.messages;
+        if (saved.meta && !conversationMeta[userId]) conversationMeta[userId] = saved.meta;
+        console.log(`[Supabase] Histórico restaurado para ${userId}: ${saved.messages.length} msgs`);
+      } else {
+        conversationHistory[userId] = [];
+      }
     }
 
     conversationHistory[userId].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
