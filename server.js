@@ -1094,8 +1094,7 @@ async function toggleHandled(){
   await fetch('/admin/handled',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:current,handled:nv})});
 }
 async function testNotify(){
-  const phone=prompt('Testar envio de notificação para qual número?\\n\\nDigite com 55 e DDD (ex: 5544991651532).\\nDeixe em branco para enviar ao Dr. Willian.');
-  if(phone===null)return;
+  const phone='';
   let d;
   try{
     const r=await fetch('/admin/test-notify',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:phone})});
@@ -1197,7 +1196,7 @@ app.post('/admin/test-notify', async (req, res) => {
   if (!ADMIN_PASSWORD || token !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const target = (req.body?.phone || '').replace(/\D/g, '') || ADMIN_PHONE;
+  const target = (req.body?.phone || '').replace(/\D/g, '') || SPECIALISTS.imobiliario.phone;
   const out = { target, config: {
     PHONE_NUMBER_ID: PHONE_NUMBER_ID ? 'ok' : 'FALTANDO',
     WHATSAPP_TOKEN: WHATSAPP_TOKEN ? 'ok' : 'FALTANDO',
