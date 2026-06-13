@@ -974,7 +974,6 @@ button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:
   <div class="hdr">
     <div class="logo" style="width:40px;height:40px;font-size:17px;margin:0">AX</div>
     <div class="ttl"><b>Atendimentos</b><span id="subt">—</span></div>
-    <span class="ref" onclick="testNotify()" title="Testar notificação">🔧</span>
     <span class="ref" onclick="load(1)" title="Atualizar">↻</span>
   </div>
   <div class="tools">
@@ -1092,9 +1091,6 @@ function updHBtn(){const c=convs[current],b=document.getElementById('hbtn');
 async function toggleHandled(){
   const c=convs[current];const nv=!c.handled;c.handled=nv;updHBtn();
   await fetch('/admin/handled',{method:'POST',headers:{'Content-Type':'application/json','x-token':tk},body:JSON.stringify({phone:current,handled:nv})});
-}
-function testNotify(){
-  window.open('/admin/test-notify-page?token='+encodeURIComponent(tk),'_blank');
 }
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
 if(tk){show('list');load();}
