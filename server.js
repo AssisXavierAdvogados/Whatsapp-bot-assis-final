@@ -1112,7 +1112,10 @@ async function testNotify(){
   }
   let msg='📲 Destino: +'+d.target+'\\n\\n';
   msg+=linha('🔔 TEMPLATE (vale fora das 24h)',d.template,'template')+'\\n';
-  msg+=linha('💬 TEXTO livre (só dentro das 24h)',d.texto,'texto');
+  msg+=linha('💬 TEXTO livre (só dentro das 24h)',d.texto,'texto')+'\\n\\n';
+  if(d.email&&d.email.ok)msg+='📧 EMAIL: ✅ Enviado para '+d.email.to+' (de '+d.email.from+')';
+  else if(d.email)msg+='📧 EMAIL: ❌ Falhou — '+JSON.stringify(d.email.error);
+  else msg+='📧 EMAIL: sem dados';
   alert(msg);
 }
 setInterval(()=>{if(document.getElementById('list').classList.contains('active'))load();},30000);
@@ -1254,6 +1257,25 @@ app.post('/admin/test-notify', async (req, res) => {
     }
     if (out.template?.id) out.entrega.template = deliveryStatus[out.template.id] || { status: 'sem_retorno' };
     if (out.texto?.id) out.entrega.texto = deliveryStatus[out.texto.id] || { status: 'sem_retorno' };
+  }
+
+  // 3) Testa EMAIL via Brevo
+  const emailTarget = req.body?.email || specialist?.email || 'willianr.assis@outlook.com';
+  try {
+    await sendEmailToSpecialist(
+      emailTarget,
+      '🔧 Teste de entrega — Ana Assis Xavier Advogados',
+      `<div style="font-family:Arial,sans-serif;padding:20px">
+        <h2 style="color:#1a5276">Teste de email funcionando ✅</h2>
+        <p>Este é um email de teste enviado pela Ana — sistema de notificações do escritório.</p>
+        <p><b>Remetente:</b> ${EMAIL_FROM || 'não configurado'}</p>
+        <p><b>Horário:</b> ${new Date().toLocaleString('pt-BR')}</p>
+        <hr><small style="color:#888">Assis e Xavier Advogados</small>
+      </div>`
+    );
+    out.email = { ok: true, to: emailTarget, from: EMAIL_FROM };
+  } catch (e) {
+    out.email = { ok: false, error: e.message };
   }
 
   console.log('[Teste] Resultado para', target, JSON.stringify(out));
