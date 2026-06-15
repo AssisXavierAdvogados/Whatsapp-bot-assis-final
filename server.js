@@ -112,6 +112,9 @@ async function supabaseLoadOne(phone) {
 // Permite saber se uma notificacao REALMENTE chegou, e nao so se foi aceita na fila.
 const deliveryStatus = {};
 
+// Metadados da conversa (nome, area, especialista) capturados ao notificar
+const conversationMeta = {};
+
 // Salva no arquivo local E arquiva o numero no Supabase
 function persist(userId) {
   saveHistory(conversationHistory);
