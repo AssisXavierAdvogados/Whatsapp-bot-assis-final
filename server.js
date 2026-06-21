@@ -115,6 +115,9 @@ const deliveryStatus = {};
 // Metadados da conversa (nome, area, especialista) capturados ao notificar
 const conversationMeta = {};
 
+// Documentos enviados pelo cliente durante a conversa (para anexar ao notificar o especialista)
+const clientDocuments = {};
+
 // Salva no arquivo local E arquiva o numero no Supabase
 function persist(userId) {
   saveHistory(conversationHistory);
@@ -325,7 +328,7 @@ function buildSystemPrompt(userId) {
     `ULTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
 }
 
-async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null) {
+async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null, attachments = []) {
   if (!BREVO_API_KEY || !EMAIL_FROM) {
     console.log('[Email] Credenciais nao configuradas, pulando envio.');
     return;
@@ -340,13 +343,39 @@ async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null)
     if (ccEmail && ccEmail !== toEmail) {
       payload.cc = [{ email: ccEmail }];
     }
+    if (attachments.length > 0) {
+      payload.attachment = attachments.map(a => ({ content: a.base64, name: a.filename }));
+    }
     await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
       headers: { 'api-key': BREVO_API_KEY, 'content-type': 'application/json' }
     });
     const ccInfo = ccEmail && ccEmail !== toEmail ? ` (CC: ${ccEmail})` : '';
-    console.log(`[Email] Enviado para ${toEmail}${ccInfo} via Brevo`);
+    const attInfo = attachments.length ? ` com ${attachments.length} anexo(s)` : '';
+    console.log(`[Email] Enviado para ${toEmail}${ccInfo} via Brevo${attInfo}`);
   } catch (e) {
     console.error('[Email] Erro ao enviar:', e.response?.data || e.message);
+  }
+}
+
+// Reenvia o documento original (mediaId) ao especialista via WhatsApp.
+// So entrega se a janela de 24h do especialista estiver aberta (nao e template).
+async function forwardDocumentToSpecialist(to, mediaId, mimeType, filename) {
+  if (!to || !PHONE_NUMBER_ID || !WHATSAPP_TOKEN || !mediaId) return;
+  const type = mimeType.startsWith('image/') ? 'image' : 'document';
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to,
+        type,
+        [type]: type === 'document' ? { id: mediaId, filename } : { id: mediaId }
+      },
+      { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+    );
+    console.log(`[Doc] Encaminhado ${filename} para ${to}`);
+  } catch (e) {
+    console.error('[Doc] Erro ao encaminhar documento:', e.response?.data?.error?.message || e.message);
   }
 }
 
@@ -406,15 +435,22 @@ async function executeTool(toolName, toolInput, clientPhone) {
       }
     }
 
-    // 3) Email — garantia que sempre chega
-    // Se o especialista nao for o admin, envia copia para o admin
+    // 3) Email — garantia que sempre chega (com os documentos do cliente anexados)
+    const documentos = clientDocuments[clientPhone] || [];
     const emailCc = specialist.email !== ADMIN_EMAIL ? ADMIN_EMAIL : null;
     await sendEmailToSpecialist(
       specialist.email,
       `Novo Atendimento - ${areaLabel} | ${nome_cliente}`,
       emailHtml,
-      emailCc
+      emailCc,
+      documentos.map(d => ({ filename: d.filename, base64: d.base64 }))
     );
+
+    // 3b) Tenta reenviar os documentos originais via WhatsApp (depende da janela de 24h)
+    for (const doc of documentos) {
+      await forwardDocumentToSpecialist(specialist.phone, doc.mediaId, doc.mimeType, doc.filename);
+    }
+    delete clientDocuments[clientPhone];
 
     // 4) Copia para o admin no WhatsApp quando o especialista e outro (Rafael ou Aline)
     if (specialist.phone !== ADMIN_PHONE) {
@@ -675,17 +711,22 @@ async function handleDocument(message, userId) {
     if (message.type === 'document') {
       mediaId = message.document.id;
       mimeType = message.document.mime_type || 'application/octet-stream';
-      filename = message.document.filename || 'documento';
+      filename = message.document.filename || 'documento.pdf';
     } else {
       mediaId = message.image.id;
       mimeType = message.image.mime_type || 'image/jpeg';
-      filename = 'imagem';
+      filename = `imagem.${mimeType.split('/')[1] || 'jpg'}`;
     }
 
     console.log(`[Doc] Recebendo ${filename} (${mimeType})`);
 
     const { url } = await getMediaUrl(mediaId);
     const buffer = await downloadMedia(url);
+
+    // Guarda o documento original para anexar/encaminhar quando notificar o especialista
+    if (!clientDocuments[userId]) clientDocuments[userId] = [];
+    clientDocuments[userId].push({ filename, mimeType, mediaId, base64: buffer.toString('base64') });
+    if (clientDocuments[userId].length > 5) clientDocuments[userId].shift();
 
     const history = conversationHistory[userId] || [];
     const recentHistory = history
