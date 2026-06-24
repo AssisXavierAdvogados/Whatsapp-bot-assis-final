@@ -118,11 +118,68 @@ const conversationMeta = {};
 // Documentos enviados pelo cliente durante a conversa (para anexar ao notificar o especialista)
 const clientDocuments = {};
 
-// Salva no arquivo local E arquiva o numero no Supabase
+// Salva no arquivo local E arquiva o numero no Supabase.
+// Os documentos do cliente (clientDocuments) viajam dentro do proprio campo
+// "meta" (sem precisar de coluna nova no Supabase) para sobreviver a um
+// restart do Render antes do caso ser encaminhado ao especialista.
 function persist(userId) {
   saveHistory(conversationHistory);
-  const extra = conversationMeta[userId] ? { meta: conversationMeta[userId] } : {};
+  const metaBase = conversationMeta[userId] || {};
+  const docs = clientDocuments[userId];
+  const meta = (docs && docs.length) ? { ...metaBase, documents: docs } : metaBase;
+  const extra = Object.keys(meta).length ? { meta } : {};
   supabaseUpsert(userId, conversationHistory[userId], extra);
+}
+
+// Garante que o historico, os metadados e os documentos do cliente estejam
+// em memoria, restaurando do Supabase quando o processo acabou de reiniciar
+// (Render free tier derruba a instancia por inatividade e zera tudo em RAM).
+async function ensureStateLoaded(userId) {
+  if (!conversationHistory[userId] || !clientDocuments[userId]) {
+    const saved = await supabaseLoadOne(userId);
+    if (saved) {
+      if (!conversationHistory[userId] && Array.isArray(saved.messages) && saved.messages.length > 0) {
+        conversationHistory[userId] = saved.messages;
+        console.log(`[Supabase] Histórico restaurado para ${userId}: ${saved.messages.length} msgs`);
+      }
+      if (saved.meta) {
+        const { documents, ...metaRest } = saved.meta;
+        if (!conversationMeta[userId] && Object.keys(metaRest).length) conversationMeta[userId] = metaRest;
+        if (!clientDocuments[userId] && Array.isArray(documents) && documents.length) {
+          clientDocuments[userId] = documents;
+          console.log(`[Supabase] ${documents.length} documento(s) restaurado(s) para ${userId}`);
+        }
+      }
+    }
+  }
+  if (!conversationHistory[userId]) conversationHistory[userId] = [];
+  if (!clientDocuments[userId]) clientDocuments[userId] = [];
+}
+
+// Serializa as chamadas a Claude por numero de telefone: evita que dois
+// arquivos/mensagens enviados em sequencia rapida pelo mesmo cliente sejam
+// processados em paralelo e corrompam o historico (duas mensagens "user"
+// seguidas sem resposta "assistant" entre elas fazem a API do Claude
+// rejeitar TODAS as chamadas futuras daquele numero com erro 400).
+const userCallQueue = {};
+function enqueueForUser(userId, taskFn) {
+  const previous = userCallQueue[userId] || Promise.resolve();
+  const next = previous.then(taskFn, taskFn);
+  userCallQueue[userId] = next;
+  return next;
+}
+
+// Mantem so as ultimas N entradas do historico, mas nunca corta entre um
+// tool_use e seu tool_result correspondente — a API do Claude exige que
+// todo tool_result venha logo depois do tool_use que o originou; cortar
+// nesse meio quebraria TODAS as chamadas futuras daquele cliente.
+function trimHistory(history, maxLen) {
+  if (history.length <= maxLen) return history;
+  let start = history.length - maxLen;
+  while (start > 0 && Array.isArray(history[start].content) && history[start].content.some(b => b.type === 'tool_result')) {
+    start--;
+  }
+  return history.slice(start);
 }
 
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
@@ -385,6 +442,11 @@ async function executeTool(toolName, toolInput, clientPhone) {
     const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
     const areaLabel = area.toUpperCase().replace('_', '/');
 
+    // Restaura documentos pendentes do Supabase ANTES de sobrescrever o campo
+    // "meta" abaixo — senao um restart do Render entre o envio do arquivo e a
+    // notificacao faria esse patch apagar os documentos ja persistidos.
+    await ensureStateLoaded(clientPhone);
+
     // Guarda metadados para exibir no painel (nome, area, especialista, horario)
     conversationMeta[clientPhone] = {
       nome: nome_cliente,
@@ -392,7 +454,10 @@ async function executeTool(toolName, toolInput, clientPhone) {
       especialista: specialist.name,
       horario: horario_preferido
     };
-    supabasePatch(clientPhone, { meta: conversationMeta[clientPhone], handled: false });
+    supabasePatch(clientPhone, {
+      meta: { ...conversationMeta[clientPhone], documents: clientDocuments[clientPhone] || [] },
+      handled: false
+    });
 
     const whatsappMsg =
       `🔔 *NOVO ATENDIMENTO - ${areaLabel}*\n\n` +
@@ -437,6 +502,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
 
     // 3) Email — garantia que sempre chega (com os documentos do cliente anexados)
     const documentos = clientDocuments[clientPhone] || [];
+    console.log(`[Especialista] ${documentos.length} documento(s) encontrado(s) para anexar (${documentos.map(d => d.filename).join(', ') || 'nenhum'})`);
     const emailCc = specialist.email !== ADMIN_EMAIL ? ADMIN_EMAIL : null;
     await sendEmailToSpecialist(
       specialist.email,
@@ -451,6 +517,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       await forwardDocumentToSpecialist(specialist.phone, doc.mediaId, doc.mimeType, doc.filename);
     }
     delete clientDocuments[clientPhone];
+    supabasePatch(clientPhone, { meta: { ...(conversationMeta[clientPhone] || {}), documents: [] } });
 
     // 4) Copia para o admin no WhatsApp quando o especialista e outro (Rafael ou Aline)
     if (specialist.phone !== ADMIN_PHONE) {
@@ -571,19 +638,12 @@ async function executeTool(toolName, toolInput, clientPhone) {
 }
 
 async function callClaudeAPI(userMessage, userId) {
+  return enqueueForUser(userId, () => callClaudeAPIInternal(userMessage, userId));
+}
+
+async function callClaudeAPIInternal(userMessage, userId) {
   try {
-    if (!conversationHistory[userId]) {
-      // Tenta restaurar do Supabase antes de comecar do zero.
-      // Evita perder historico apos restart do servidor.
-      const saved = await supabaseLoadOne(userId);
-      if (saved && Array.isArray(saved.messages) && saved.messages.length > 0) {
-        conversationHistory[userId] = saved.messages;
-        if (saved.meta && !conversationMeta[userId]) conversationMeta[userId] = saved.meta;
-        console.log(`[Supabase] Histórico restaurado para ${userId}: ${saved.messages.length} msgs`);
-      } else {
-        conversationHistory[userId] = [];
-      }
-    }
+    await ensureStateLoaded(userId);
 
     conversationHistory[userId].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
 
@@ -632,9 +692,7 @@ async function callClaudeAPI(userMessage, userId) {
       conversationHistory[userId].push({ ...toolResultMsg, ts: new Date().toISOString() });
     }
 
-    if (conversationHistory[userId].length > 40) {
-      conversationHistory[userId] = conversationHistory[userId].slice(-40);
-    }
+    conversationHistory[userId] = trimHistory(conversationHistory[userId], 40);
     persist(userId);
 
     return extractText(response.data.content);
@@ -723,10 +781,15 @@ async function handleDocument(message, userId) {
     const { url } = await getMediaUrl(mediaId);
     const buffer = await downloadMedia(url);
 
-    // Guarda o documento original para anexar/encaminhar quando notificar o especialista
-    if (!clientDocuments[userId]) clientDocuments[userId] = [];
+    // Guarda o documento original para anexar/encaminhar quando notificar o especialista.
+    // Restaura do Supabase primeiro: se o servidor reiniciou entre um arquivo e outro
+    // (Render free tier derruba a instancia por inatividade), o array em memoria teria
+    // sido zerado e o arquivo anterior seria perdido silenciosamente.
+    await ensureStateLoaded(userId);
     clientDocuments[userId].push({ filename, mimeType, mediaId, base64: buffer.toString('base64') });
     if (clientDocuments[userId].length > 5) clientDocuments[userId].shift();
+    console.log(`[Doc] ${filename} salvo para ${userId}. Total de documentos pendentes: ${clientDocuments[userId].length}`);
+    supabasePatch(userId, { meta: { ...(conversationMeta[userId] || {}), documents: clientDocuments[userId] } });
 
     const history = conversationHistory[userId] || [];
     const recentHistory = history
@@ -742,7 +805,7 @@ async function handleDocument(message, userId) {
 
     return callClaudeAPI(`[ANALISE DO DOCUMENTO - ${filename}]\n${analysisResult}`, userId);
   } catch (error) {
-    console.error('[Doc] Erro ao processar documento:', error.message);
+    console.error('[Doc] Erro ao processar documento:', error.response?.data || error.message);
     return callClaudeAPI('O cliente enviou um documento mas ocorreu um erro tecnico. Peca para tentar novamente.', userId);
   }
 }
@@ -907,9 +970,11 @@ app.post('/webhook', async (req, res) => {
         clearTimeout(pendingMessages[senderNumber].timer);
         const pending = pendingMessages[senderNumber];
         delete pendingMessages[senderNumber];
-        if (!conversationHistory[senderNumber]) conversationHistory[senderNumber] = [];
-        conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n'), ts: new Date().toISOString() });
-        persist(senderNumber);
+        await enqueueForUser(senderNumber, async () => {
+          await ensureStateLoaded(senderNumber);
+          conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n'), ts: new Date().toISOString() });
+          persist(senderNumber);
+        });
       }
 
       console.log(`[Webhook] ${message.type} recebido de ${senderNumber}`);
