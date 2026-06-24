@@ -182,6 +182,64 @@ function trimHistory(history, maxLen) {
   return history.slice(start);
 }
 
+// Sana o historico ANTES de enviar a API do Claude, para que conversas que
+// JA foram gravadas corrompidas (ex: duas mensagens "user" seguidas por uma
+// corrida antiga, ou um tool_use sem tool_result) voltem a funcionar sozinhas
+// na proxima mensagem — em vez de ficar em loop eterno de "problema tecnico".
+// A API exige: comeca com user, papeis alternam, e todo tool_use tem seu
+// tool_result correspondente (e vice-versa).
+function sanitizeMessages(rawMessages) {
+  const toolUseIds = new Set();
+  const toolResultIds = new Set();
+  for (const m of rawMessages) {
+    if (Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b.type === 'tool_use') toolUseIds.add(b.id);
+        if (b.type === 'tool_result') toolResultIds.add(b.tool_use_id);
+      }
+    }
+  }
+
+  // 1) Remove blocos de ferramenta orfaos (sem o par correspondente)
+  const cleaned = [];
+  for (const m of rawMessages) {
+    let content = m.content;
+    if (Array.isArray(content)) {
+      const filtered = content.filter(b => {
+        if (b.type === 'tool_use') return toolResultIds.has(b.id);
+        if (b.type === 'tool_result') return toolUseIds.has(b.tool_use_id);
+        return true;
+      });
+      if (filtered.length === 0) continue; // mensagem ficou vazia: descarta
+      content = filtered;
+    } else if (typeof content !== 'string' || content.trim() === '') {
+      if (typeof content === 'string') continue; // texto vazio: descarta
+    }
+    cleaned.push({ role: m.role, content });
+  }
+
+  // 2) Funde mensagens consecutivas do mesmo papel
+  const toArr = c => Array.isArray(c) ? c : [{ type: 'text', text: String(c) }];
+  const merged = [];
+  for (const m of cleaned) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === m.role) {
+      if (typeof last.content === 'string' && typeof m.content === 'string') {
+        last.content = `${last.content}\n${m.content}`;
+      } else {
+        last.content = [...toArr(last.content), ...toArr(m.content)];
+      }
+    } else {
+      merged.push({ role: m.role, content: m.content });
+    }
+  }
+
+  // 3) Garante que a conversa comeca com 'user'
+  while (merged.length && merged[0].role !== 'user') merged.shift();
+
+  return merged;
+}
+
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
@@ -647,8 +705,11 @@ async function callClaudeAPIInternal(userMessage, userId) {
 
     conversationHistory[userId].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
 
-    // A API do Claude recebe apenas role/content (sem o campo ts)
-    const messages = conversationHistory[userId].map(({ role, content }) => ({ role, content }));
+    // A API do Claude recebe apenas role/content (sem o campo ts) e ja saneado,
+    // para que historicos corrompidos por bugs antigos voltem a funcionar.
+    const messages = sanitizeMessages(
+      conversationHistory[userId].map(({ role, content }) => ({ role, content }))
+    );
     let response;
 
     while (true) {
