@@ -716,7 +716,7 @@ async function callClaudeAPIInternal(userMessage, userId) {
       response = await axios.post(
         'https://api.anthropic.com/v1/messages',
         {
-          model: 'claude-opus-4-1',
+          model: 'claude-opus-4-8',
           max_tokens: 1024,
           system: buildSystemPrompt(userId),
           tools: TOOLS,
@@ -802,7 +802,7 @@ async function analyzeDocumentWithClaude(buffer, mimeType, conversationContext) 
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-opus-4-1',
+        model: 'claude-opus-4-8',
         max_tokens: 1024,
         system: DOCUMENT_ANALYSIS_PROMPT,
         messages: [{ role: 'user', content: userContent }]
