@@ -1534,16 +1534,6 @@ app.listen(PORT, () => {
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
   console.log(`Webhook: GET|POST /webhook`);
 
-  const SERVICE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-  setInterval(async () => {
-    try {
-      await axios.get(`${SERVICE_URL}/health`);
-      console.log('[Ping] Servidor ativo');
-    } catch (e) {
-      console.log('[Ping] Falha no ping:', e.message);
-    }
-  }, 10 * 60 * 1000);
-
   // Cutuca o Supabase a cada 6h para nao pausar por inatividade (limite de 7 dias)
   if (supabaseEnabled()) {
     setInterval(async () => {
