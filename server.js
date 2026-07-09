@@ -850,20 +850,23 @@ async function executeTool(toolName, toolInput, clientPhone) {
     const code = genTriageCode();
 
     const triageText =
-      `⚖️ *TRIAGEM - Caso trabalhista*  [${code}]\n\n` +
+      `⚖️ *TRIAGEM - PRECISO DA SUA DECISAO*  [${code}]\n\n` +
+      `*O escritorio deve ASSUMIR este caso trabalhista?*\n` +
+      `➡️ Responda *SIM ${code}* (assume) ou *NAO ${code}* (recusa)\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `💰 *Salario:* ${salario}\n` +
       `🕐 *Tempo:* ${tempo_trabalho}\n\n` +
       `📋 ${resumo_caso}\n\n` +
-      `*O escritorio assume este caso?*\n` +
-      `Responda *SIM ${code}* ou *NAO ${code}* _(pode responder so SIM ou NAO tambem)._`;
+      `_(pode responder so SIM ou NAO tambem)_`;
 
-    // 1) Template aprovado (chega mesmo fora da janela de 24h)
+    // 1) Template aprovado (chega mesmo fora da janela de 24h). Como o texto fixo
+    //    do template e generico ("novo atendimento"), colocamos a PERGUNTA em mais
+    //    de um campo para que ela apareca com destaque independentemente do layout.
     await sendWhatsAppTemplate(specialist.phone, [
-      `TRIAGEM trabalhista - responda SIM ${code} ou NAO ${code}`,
+      `TRIAGEM: o escritorio deve ASSUMIR este caso? Responda SIM ${code} ou NAO ${code}`,
       nome_cliente,
-      `Salario ${salario} | ${tempo_trabalho}`,
-      `Codigo ${code}`,
+      `Salario ${salario} | Tempo ${tempo_trabalho}`,
+      `RESPONDA: SIM ${code} (assume) ou NAO ${code} (recusa)`,
       resumo_caso
     ]);
 
