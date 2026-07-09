@@ -310,6 +310,67 @@ const SPECIALISTS = {
 const ADMIN_PHONE = '5544999784442';
 const ADMIN_EMAIL = 'willianr.assis@outlook.com';
 
+// --- Reconhecimento de numeros (especialistas) ---
+// No Brasil o Meta as vezes entrega o numero do celular SEM o 9 extra apos o DDD.
+// Geramos as duas formas (com e sem o 9) para comparar de forma tolerante e nao
+// tratar um advogado do escritorio como se fosse um cliente novo.
+function phoneVariants(p) {
+  p = String(p || '').replace(/\D/g, '');
+  const set = new Set();
+  if (!p) return set;
+  set.add(p);
+  const com9 = p.match(/^(55)(\d{2})9(\d{8})$/);   // 13 digitos, com 9
+  if (com9) set.add(com9[1] + com9[2] + com9[3]);   // -> 12 digitos, sem 9
+  const sem9 = p.match(/^(55)(\d{2})(\d{8})$/);     // 12 digitos, sem 9
+  if (sem9) set.add(sem9[1] + sem9[2] + '9' + sem9[3]); // -> 13 digitos, com 9
+  return set;
+}
+function phonesMatch(a, b) {
+  const A = phoneVariants(a);
+  for (const v of phoneVariants(b)) if (A.has(v)) return true;
+  return false;
+}
+
+// Retorna o objeto do especialista cujo numero bate com o telefone dado (ou null).
+// Como Dr. Willian aparece em varias areas, devolvemos o primeiro que casar.
+function findSpecialistByPhone(phone) {
+  for (const key of Object.keys(SPECIALISTS)) {
+    if (phonesMatch(SPECIALISTS[key].phone, phone)) return SPECIALISTS[key];
+  }
+  return null;
+}
+
+// Busca triagens pendentes de um especialista direto no Supabase (sobrevive a
+// restart do Render, quando a memoria foi zerada). As linhas de triagem tem
+// phone comecando com "TRIAGE#".
+async function supabaseFindPendingTriages(specialistPhone) {
+  if (!supabaseEnabled()) return [];
+  try {
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?phone=like.TRIAGE*&handled=eq.false&select=meta`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    return (r.data || [])
+      .map(row => row.meta)
+      .filter(m => m && m.type === 'triage' && !m.resolved && phonesMatch(m.specialistPhone, specialistPhone));
+  } catch (e) {
+    console.error('[Triagem] Erro ao buscar pendentes:', e.message);
+    return [];
+  }
+}
+
+// Lista triagens pendentes de um especialista (memoria + Supabase, sem duplicar).
+async function listPendingTriages(specialistPhone) {
+  const byCode = {};
+  for (const [code, t] of Object.entries(pendingTriage)) {
+    if (phonesMatch(t.specialistPhone, specialistPhone)) byCode[code] = t;
+  }
+  for (const m of await supabaseFindPendingTriages(specialistPhone)) {
+    if (m.code && !byCode[m.code]) byCode[m.code] = m;
+  }
+  return Object.entries(byCode).map(([code, t]) => ({ code, nome: t.nome }));
+}
+
 // Mensagens enviadas ao cliente apos a triagem trabalhista (decisao do especialista).
 // Emendam na conversa ja em andamento (sem "Ola"), num tom natural e formal.
 function triageAcceptMessage(nome, horario) {
@@ -358,8 +419,10 @@ ESPECIALISTAS DO ESCRITORIO:
 - Familia, Criminal e Previdenciario -> Dra. Aline Xavier
 
 FLUXO DE ATENDIMENTO - SIGA RIGOROSAMENTE:
-1. Primeira mensagem: se apresente brevemente e pergunte o que esta acontecendo
-2. Com a resposta, identifique a area juridica
+1. Primeira mensagem de uma conversa nova: apresente-se brevemente ("Sou a Ana, do escritorio Assis e Xavier Advogados") e pergunte, de forma acolhedora, o NOME da pessoa antes de qualquer outra coisa.
+2. Com o nome em maos, use-o naturalmente e ai sim pergunte o que esta acontecendo / no que pode ajudar.
+3. Com a resposta, identifique a area juridica.
+- IMPORTANTE: nunca peca o caso antes do nome numa conversa nova. Se a pessoa ja contar o problema junto com o "oi", agradeca, pergunte o nome dela e so entao siga.
 
 QUALIFICACAO - SEJA AGIL E NATURAL:
 - Peca ao cliente que conte o que aconteceu, com datas e como foi. Pode perguntar de forma leve, sem pressao.
@@ -876,18 +939,18 @@ async function resolveTriage(code, aceito) {
   return true;
 }
 
-// Interpreta a resposta do especialista a uma triagem. Retorna:
-//   { code, aceito }  quando conseguiu identificar caso + decisao
-//   { needCode: true } quando ha triagem pendente mas falta o codigo/decisao clara
-//   null               quando nao parece ser uma resposta de triagem
+// Interpreta a resposta de um especialista a uma triagem. Retorna:
+//   { code, aceito }              conseguiu identificar caso + decisao (SIM/NAO)
+//   { ambiguous: true, code? }    tem o caso mas a decisao nao ficou clara
+//   { needCode: true, pendentes } ha triagem(ns) pendente(s) mas falta o codigo
+//   { none: true }                especialista sem nenhuma triagem pendente
 async function interpretTriageReply(message, senderNumber) {
-  const isSpecialist = Object.values(SPECIALISTS).some(s => s.phone === senderNumber);
-  if (!isSpecialist) return null;
-
   const text = (message.text?.body || '').trim();
-  const upper = text.toUpperCase();
+  const upper = text
+    .toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // remove acentos (NAO == NÃO)
 
-  // 1) Localiza o codigo: por "responder" do WhatsApp, por token no texto, ou triagem unica pendente
+  // 1) Localiza o codigo: "responder" do WhatsApp, token no texto, ou triagem unica pendente
   let code = null;
   const ctxId = message.context?.id;
   if (ctxId && triageByMsgId[ctxId]) code = triageByMsgId[ctxId];
@@ -900,24 +963,81 @@ async function interpretTriageReply(message, senderNumber) {
     }
   }
 
-  const pendingForSpecialist = Object.entries(pendingTriage)
-    .filter(([, t]) => t.specialistPhone === senderNumber);
+  // Pendentes deste especialista (memoria + Supabase, para sobreviver a restart)
+  const pendentes = await listPendingTriages(senderNumber);
+  if (!code && pendentes.length === 1) code = pendentes[0].code;
 
-  if (!code && pendingForSpecialist.length === 1) code = pendingForSpecialist[0][0];
+  if (!code && pendentes.length === 0) return { none: true };
 
-  // Se nao ha nenhum indicio de triagem, deixa seguir o fluxo normal da Ana
-  if (!code && pendingForSpecialist.length === 0) return null;
+  // 2) Detecta a decisao — negacao tem precedencia (cobre "nao tem interesse").
+  const naoRe = /(\bNAO\b|RECUS|DESCART|NEGATIV|\bPASSO\b|SEM INTERESSE|NAO (TENHO|TEMOS|HA) INTERESSE)/;
+  const simRe = /(\bSIM\b|ACEIT|POSITIV|\bOK\b|ASSUM|\bPODE\b|INTERESSAD|(TENHO|TEMOS|HA) INTERESSE|INTERESSA\b)/;
+  const hasNao = naoRe.test(upper);
+  const hasSim = simRe.test(upper);
 
-  // 2) Detecta a decisao
-  const simRe = /\b(SIM|ACEITO|ACEITAR|ACEITA|INTERESSA|PODE|VAI|OK|POSITIVO|ASSUM\w*)\b/;
-  const naoRe = /\b(NAO|NÃO|RECUSO|RECUSAR|RECUSA|DESCARTA\w*|PASSO|NEGATIVO|NEGADO)\b/;
-  const disseSim = simRe.test(upper);
-  const disseNao = naoRe.test(upper);
+  let aceito;
+  if (hasNao) aceito = false;
+  else if (hasSim) aceito = true;
+  else return { ambiguous: true, code, pendentes };
 
-  if (disseSim === disseNao) return { needCode: !code, ambiguous: true, code };
-  if (!code) return { needCode: true };
+  if (!code) return { needCode: true, pendentes };
+  return { code, aceito };
+}
 
-  return { code, aceito: disseSim };
+// Tratamento dedicado para mensagens vindas dos advogados do escritorio.
+// Eles NUNCA entram no fluxo de lead da Ana — sao contatos prioritarios.
+async function handleSpecialistMessage(message, senderNumber, specialist) {
+  const nomeCurto = specialist.name;
+
+  // So mensagens de texto podem ser resposta de triagem
+  const triage = message.type === 'text'
+    ? await interpretTriageReply(message, senderNumber)
+    : { none: true };
+
+  if (triage.code && typeof triage.aceito === 'boolean') {
+    const ok = await resolveTriage(triage.code, triage.aceito);
+    if (!ok) {
+      await sendWhatsAppMessage(senderNumber, `Nao encontrei o caso ${triage.code} (talvez ja tenha sido respondido). Se precisar, me diga o codigo novamente.`);
+      return;
+    }
+    await sendWhatsAppMessage(
+      senderNumber,
+      triage.aceito
+        ? `✅ Perfeito, ${nomeCurto}. Caso ${triage.code} confirmado — ja avisei o cliente e enviei os dados completos para contato.`
+        : `👍 Entendido, ${nomeCurto}. Caso ${triage.code} recusado. Ja comuniquei o cliente de forma educada. Obrigada!`
+    );
+    return;
+  }
+
+  if (triage.ambiguous) {
+    const alvo = triage.code ? ` do caso ${triage.code}` : '';
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, nao entendi a decisao${alvo}. Pode responder *SIM* ou *NAO*${triage.code ? ` ${triage.code}` : ''}?`);
+    return;
+  }
+
+  if (triage.needCode) {
+    const lista = triage.pendentes.map(p => `• ${p.code} — ${p.nome}`).join('\n');
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, ha mais de um caso em triagem. Responda com o codigo, por exemplo *SIM ${triage.pendentes[0].code}* ou *NAO ${triage.pendentes[0].code}*:\n${lista}`);
+    return;
+  }
+
+  // Sem triagem pendente: permite consultar os casos aguardando decisao
+  if (message.type === 'text' && /\b(CASOS?|PENDENTE|TRIAGE|TRIAGEM)\b/i.test(message.text?.body || '')) {
+    const pend = await listPendingTriages(senderNumber);
+    if (pend.length) {
+      const lista = pend.map(p => `• ${p.code} — ${p.nome}`).join('\n');
+      await sendWhatsAppMessage(senderNumber, `${nomeCurto}, casos aguardando sua decisao:\n${lista}\n\nResponda *SIM <codigo>* ou *NAO <codigo>*.`);
+    } else {
+      await sendWhatsAppMessage(senderNumber, `${nomeCurto}, nao ha nenhum caso em triagem aguardando sua decisao no momento.`);
+    }
+    return;
+  }
+
+  // Qualquer outra mensagem do advogado: resposta profissional, sem intake de lead
+  await sendWhatsAppMessage(
+    senderNumber,
+    `Ola, ${nomeCurto}. Aqui e o atendimento automatico da Ana. No momento nao ha nenhum caso em triagem aguardando sua resposta — assim que houver, envio por aqui. Se quiser ver os pendentes, e so escrever "casos".`
+  );
 }
 
 async function callClaudeAPI(userMessage, userId) {
@@ -1239,32 +1359,13 @@ app.post('/webhook', async (req, res) => {
 
     await markAsRead(messageId);
 
-    // Resposta de um especialista a uma triagem trabalhista (SIM/NAO)?
-    // Precisa ser tratada ANTES do fluxo normal para nao virar conversa da Ana.
-    if (message.type === 'text') {
-      const triage = await interpretTriageReply(message, senderNumber);
-      if (triage) {
-        if (triage.code && typeof triage.aceito === 'boolean') {
-          await resolveTriage(triage.code, triage.aceito);
-          await sendWhatsAppMessage(
-            senderNumber,
-            triage.aceito
-              ? `✅ Caso ${triage.code} confirmado. Cliente avisado e notificacao completa enviada.`
-              : `👍 Caso ${triage.code} recusado. Cliente comunicado de forma educada. Obrigado!`
-          );
-        } else if (triage.ambiguous && triage.code) {
-          await sendWhatsAppMessage(
-            senderNumber,
-            `Nao entendi a decisao do caso ${triage.code}. Responda *SIM ${triage.code}* ou *NAO ${triage.code}*, por favor.`
-          );
-        } else {
-          await sendWhatsAppMessage(
-            senderNumber,
-            `Ha caso(s) de triagem aguardando resposta. Responda com o codigo, ex: *SIM ABC* ou *NAO ABC*.`
-          );
-        }
-        return;
-      }
+    // Advogados do escritorio (especialistas) tem tratamento proprio e NUNCA
+    // sao tratados como lead/cliente. Isso precisa vir ANTES de todo o resto.
+    const specialist = findSpecialistByPhone(senderNumber);
+    if (specialist) {
+      console.log(`[Especialista] Mensagem de ${specialist.name} (${senderNumber})`);
+      await handleSpecialistMessage(message, senderNumber, specialist);
+      return;
     }
 
     if (message.type === 'audio' || message.type === 'voice') {
