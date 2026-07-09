@@ -118,6 +118,48 @@ const conversationMeta = {};
 // Documentos enviados pelo cliente durante a conversa (para anexar ao notificar o especialista)
 const clientDocuments = {};
 
+// Triagem de casos trabalhistas: guarda os casos aguardando o SIM/NAO do especialista.
+// Cada caso vira uma linha propria no Supabase (phone = "TRIAGE#<codigo>") para
+// sobreviver a um restart do Render enquanto o especialista ainda nao respondeu.
+// Como essas linhas tem messages=[], o painel /admin as ignora automaticamente.
+const pendingTriage = {};   // codigo -> { clientPhone, area, nome, horario, resumo, salario, tempo, specialistPhone, triageMsgId }
+const triageByMsgId = {};   // id da mensagem de triagem enviada -> codigo (casa o "responder" do WhatsApp)
+
+function triageRowPhone(code) { return `TRIAGE#${code}`; }
+
+function genTriageCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem 0/O/1/I para nao confundir
+  let c = '';
+  for (let i = 0; i < 3; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  return c;
+}
+
+function saveTriage(code, data) {
+  pendingTriage[code] = data;
+  if (data.triageMsgId) triageByMsgId[data.triageMsgId] = code;
+  supabaseUpsert(triageRowPhone(code), [], { meta: { type: 'triage', code, ...data }, handled: false });
+}
+
+// Recupera uma triagem pelo codigo, restaurando do Supabase se a memoria foi
+// zerada por um restart do Render entre o envio e a resposta do especialista.
+async function loadTriage(code) {
+  if (pendingTriage[code]) return pendingTriage[code];
+  const saved = await supabaseLoadOne(triageRowPhone(code));
+  if (saved && saved.meta && saved.meta.type === 'triage' && !saved.meta.resolved) {
+    pendingTriage[code] = saved.meta;
+    return saved.meta;
+  }
+  return null;
+}
+
+function clearTriage(code) {
+  const data = pendingTriage[code];
+  if (data && data.triageMsgId) delete triageByMsgId[data.triageMsgId];
+  delete pendingTriage[code];
+  // Marca como resolvida (nao apaga, para manter rastro de auditoria)
+  supabasePatch(triageRowPhone(code), { meta: { type: 'triage', code, resolved: true }, handled: true });
+}
+
 // Salva no arquivo local E arquiva o numero no Supabase.
 // Os documentos do cliente (clientDocuments) viajam dentro do proprio campo
 // "meta" (sem precisar de coluna nova no Supabase) para sobreviver a um
@@ -268,6 +310,28 @@ const SPECIALISTS = {
 const ADMIN_PHONE = '5544999784442';
 const ADMIN_EMAIL = 'willianr.assis@outlook.com';
 
+// Mensagens enviadas ao cliente apos a triagem trabalhista (decisao do especialista).
+// Emendam na conversa ja em andamento (sem "Ola"), num tom natural e formal.
+function triageAcceptMessage(nome, horario) {
+  const primeiroNome = (nome || '').trim().split(' ')[0] || '';
+  const saud = primeiroNome ? `${primeiroNome}, ` : '';
+  const quando = horario ? ` no horario que voce indicou (${horario})` : '';
+  return `${saud}boa noticia! Confirmei com o nosso especialista e vamos poder cuidar do seu caso. ` +
+    `O Dr. Rafael Jorge Pinhatti vai entrar em contato com voce${quando}. Fico a disposicao se precisar de algo.`;
+}
+
+function triageDeclineMessage(nome) {
+  const primeiroNome = (nome || '').trim().split(' ')[0] || '';
+  const saud = primeiroNome ? `${primeiroNome}, ` : '';
+  return `${saud}encaminhei seu caso ao nosso especialista e, apos uma analise inicial, verificamos que ` +
+    `neste momento nao poderemos assumir o seu processo.\n\n` +
+    `Isso nao significa que voce nao tenha direitos — apenas que, no momento, nao conseguimos oferecer ` +
+    `o atendimento adequado a essa demanda especifica. Se desejar, pode buscar orientacao junto a OAB da ` +
+    `sua cidade ou a Defensoria Publica.\n\n` +
+    `Agradeco muito a sua confianca e desejo sucesso na resolucao da sua questao. ` +
+    `Atenciosamente, Assis e Xavier Advogados.`;
+}
+
 const OFFICE_CONTEXT = `
 Voce e Ana, atendente do Assis e Xavier Advogados, escritorio juridico full service em Maringa, Parana.
 
@@ -334,9 +398,16 @@ IMPORTANTE - ANALISE DE DOCUMENTOS:
 - Apos informar, continue o fluxo: peca o nome e horario
 
 IMPORTANTE - FERRAMENTAS:
-- Use notificar_especialista quando tiver: nome do cliente, situacao clara e horario preferido
+- Use notificar_especialista quando tiver: nome do cliente, situacao clara e horario preferido (EXCETO casos trabalhistas)
 - Use reenviar_lembrete quando cliente disser que nao foi contatado
 - Apos usar qualquer ferramenta, confirme ao cliente de forma natural
+
+IMPORTANTE - CASOS TRABALHISTAS (REGRA ESPECIAL):
+- Para caso trabalhista, NUNCA use notificar_especialista. Use SEMPRE triar_caso_trabalhista.
+- Antes de triar, alem do que aconteceu, colete de forma natural (sem interrogatorio): o ultimo salario do cliente, ha quanto tempo trabalhou na empresa (ou quando saiu), nome e melhor horario.
+- Quando tiver esses dados, chame triar_caso_trabalhista. O escritorio faz uma analise antes de assumir o caso.
+- Depois de triar: diga ao cliente, de forma acolhedora, que vai confirmar a disponibilidade com o especialista e retorna em seguida. NAO prometa que o especialista vai ligar ainda - isso depende da confirmacao.
+- A resposta final (se o escritorio assume ou nao) sera enviada automaticamente ao cliente. Voce nao precisa fazer mais nada apos triar.
 
 AREAS:
 - Trabalhista: demissao, horas extras, assedio, acidente, rescisao -> Dr. Rafael Jorge Pinhatti
@@ -408,6 +479,24 @@ const TOOLS = [
         nome_cliente: { type: 'string', description: 'Nome do cliente que aguarda retorno' }
       },
       required: ['area', 'nome_cliente']
+    }
+  },
+  {
+    name: 'triar_caso_trabalhista',
+    description: 'USE APENAS para casos TRABALHISTAS. Em vez de notificar o especialista diretamente, envia o caso para uma triagem previa com o Dr. Rafael, que decide se o escritorio vai assumir. So use quando ja tiver: nome do cliente, horario preferido, ultimo salario, tempo de trabalho e um resumo do que aconteceu. NUNCA use notificar_especialista para casos trabalhistas.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome_cliente: { type: 'string', description: 'Nome do cliente' },
+        horario_preferido: { type: 'string', description: 'Melhor horario para contato, caso o caso seja aceito' },
+        salario: { type: 'string', description: 'Ultimo salario do cliente (ex: R$ 1.800)' },
+        tempo_trabalho: { type: 'string', description: 'Quanto tempo trabalhou na empresa e/ou ha quanto tempo saiu (ex: 12 anos de casa, saiu ha 3 meses)' },
+        resumo_caso: {
+          type: 'string',
+          description: 'Resumo do caso: o que aconteceu, o que a empresa deixou de pagar, pontos relevantes'
+        }
+      },
+      required: ['nome_cliente', 'horario_preferido', 'salario', 'tempo_trabalho', 'resumo_caso']
     }
   }
 ];
@@ -692,7 +781,143 @@ async function executeTool(toolName, toolInput, clientPhone) {
     return `Lembrete reenviado para ${specialist.name}.`;
   }
 
+  if (toolName === 'triar_caso_trabalhista') {
+    const { nome_cliente, horario_preferido, salario, tempo_trabalho, resumo_caso } = toolInput;
+    const specialist = SPECIALISTS.trabalhista;
+    const code = genTriageCode();
+
+    const triageText =
+      `⚖️ *TRIAGEM - Caso trabalhista*  [${code}]\n\n` +
+      `👤 *Cliente:* ${nome_cliente}\n` +
+      `💰 *Salario:* ${salario}\n` +
+      `🕐 *Tempo:* ${tempo_trabalho}\n\n` +
+      `📋 ${resumo_caso}\n\n` +
+      `*O escritorio assume este caso?*\n` +
+      `Responda *SIM ${code}* ou *NAO ${code}* _(pode responder so SIM ou NAO tambem)._`;
+
+    // 1) Template aprovado (chega mesmo fora da janela de 24h)
+    await sendWhatsAppTemplate(specialist.phone, [
+      `TRIAGEM trabalhista - responda SIM ${code} ou NAO ${code}`,
+      nome_cliente,
+      `Salario ${salario} | ${tempo_trabalho}`,
+      `Codigo ${code}`,
+      resumo_caso
+    ]);
+
+    // 2) Texto livre (formatacao bonita, dentro da janela de 24h) — capturamos o id
+    //    da mensagem para casar caso o especialista use o "responder" do WhatsApp.
+    let triageMsgId = null;
+    try {
+      const sent = await sendWhatsAppMessage(specialist.phone, triageText);
+      triageMsgId = sent?.messages?.[0]?.id || null;
+    } catch (e) {
+      console.error('[Triagem] Erro ao enviar texto livre:', e.message);
+    }
+
+    saveTriage(code, {
+      clientPhone,
+      area: 'trabalhista',
+      nome: nome_cliente,
+      horario: horario_preferido,
+      salario,
+      tempo: tempo_trabalho,
+      resumo: resumo_caso,
+      specialistPhone: specialist.phone,
+      triageMsgId
+    });
+
+    console.log(`[Triagem] Caso ${code} (${nome_cliente}) enviado ao Dr. Rafael. Aguardando SIM/NAO.`);
+
+    return `Triagem enviada ao especialista (codigo ${code}). Diga ao cliente, de forma natural e acolhedora, ` +
+      `que voce vai confirmar a disponibilidade com o especialista e retorna em seguida. ` +
+      `NAO afirme ainda que o especialista vai ligar — isso depende da confirmacao. Encerre por aqui.`;
+  }
+
   return 'Ferramenta desconhecida.';
+}
+
+// Resolve uma triagem trabalhista quando o especialista responde SIM/NAO.
+// Chamada a partir do webhook (fluxo assincrono, fora do loop da Ana).
+async function resolveTriage(code, aceito) {
+  const t = await loadTriage(code);
+  if (!t) {
+    console.log(`[Triagem] Codigo ${code} nao encontrado ou ja resolvido.`);
+    return false;
+  }
+  clearTriage(code);
+
+  if (aceito) {
+    console.log(`[Triagem] Caso ${code} ACEITO pelo especialista. Notificando normalmente.`);
+    // Reusa o fluxo completo e ja testado de notificacao ao especialista.
+    await executeTool('notificar_especialista', {
+      area: 'trabalhista',
+      nome_cliente: t.nome,
+      horario_preferido: t.horario,
+      resumo_caso: t.resumo
+    }, t.clientPhone);
+
+    const msg = triageAcceptMessage(t.nome, t.horario);
+    await sendWhatsAppMessage(t.clientPhone, msg);
+    await enqueueForUser(t.clientPhone, async () => {
+      await ensureStateLoaded(t.clientPhone);
+      conversationHistory[t.clientPhone].push({ role: 'assistant', content: msg, ts: new Date().toISOString() });
+      persist(t.clientPhone);
+    });
+  } else {
+    console.log(`[Triagem] Caso ${code} RECUSADO pelo especialista. Enviando recusa educada ao cliente.`);
+    const msg = triageDeclineMessage(t.nome);
+    await sendWhatsAppMessage(t.clientPhone, msg);
+    await enqueueForUser(t.clientPhone, async () => {
+      await ensureStateLoaded(t.clientPhone);
+      conversationHistory[t.clientPhone].push({ role: 'assistant', content: msg, ts: new Date().toISOString() });
+      persist(t.clientPhone);
+    });
+  }
+  return true;
+}
+
+// Interpreta a resposta do especialista a uma triagem. Retorna:
+//   { code, aceito }  quando conseguiu identificar caso + decisao
+//   { needCode: true } quando ha triagem pendente mas falta o codigo/decisao clara
+//   null               quando nao parece ser uma resposta de triagem
+async function interpretTriageReply(message, senderNumber) {
+  const isSpecialist = Object.values(SPECIALISTS).some(s => s.phone === senderNumber);
+  if (!isSpecialist) return null;
+
+  const text = (message.text?.body || '').trim();
+  const upper = text.toUpperCase();
+
+  // 1) Localiza o codigo: por "responder" do WhatsApp, por token no texto, ou triagem unica pendente
+  let code = null;
+  const ctxId = message.context?.id;
+  if (ctxId && triageByMsgId[ctxId]) code = triageByMsgId[ctxId];
+
+  if (!code) {
+    const tokens = upper.match(/\b[A-Z2-9]{3}\b/g) || [];
+    for (const tok of tokens) {
+      if (tok === 'SIM' || tok === 'NAO') continue;
+      if (await loadTriage(tok)) { code = tok; break; }
+    }
+  }
+
+  const pendingForSpecialist = Object.entries(pendingTriage)
+    .filter(([, t]) => t.specialistPhone === senderNumber);
+
+  if (!code && pendingForSpecialist.length === 1) code = pendingForSpecialist[0][0];
+
+  // Se nao ha nenhum indicio de triagem, deixa seguir o fluxo normal da Ana
+  if (!code && pendingForSpecialist.length === 0) return null;
+
+  // 2) Detecta a decisao
+  const simRe = /\b(SIM|ACEITO|ACEITAR|ACEITA|INTERESSA|PODE|VAI|OK|POSITIVO|ASSUM\w*)\b/;
+  const naoRe = /\b(NAO|NÃO|RECUSO|RECUSAR|RECUSA|DESCARTA\w*|PASSO|NEGATIVO|NEGADO)\b/;
+  const disseSim = simRe.test(upper);
+  const disseNao = naoRe.test(upper);
+
+  if (disseSim === disseNao) return { needCode: !code, ambiguous: true, code };
+  if (!code) return { needCode: true };
+
+  return { code, aceito: disseSim };
 }
 
 async function callClaudeAPI(userMessage, userId) {
@@ -1013,6 +1238,34 @@ app.post('/webhook', async (req, res) => {
     const messageId = message.id;
 
     await markAsRead(messageId);
+
+    // Resposta de um especialista a uma triagem trabalhista (SIM/NAO)?
+    // Precisa ser tratada ANTES do fluxo normal para nao virar conversa da Ana.
+    if (message.type === 'text') {
+      const triage = await interpretTriageReply(message, senderNumber);
+      if (triage) {
+        if (triage.code && typeof triage.aceito === 'boolean') {
+          await resolveTriage(triage.code, triage.aceito);
+          await sendWhatsAppMessage(
+            senderNumber,
+            triage.aceito
+              ? `✅ Caso ${triage.code} confirmado. Cliente avisado e notificacao completa enviada.`
+              : `👍 Caso ${triage.code} recusado. Cliente comunicado de forma educada. Obrigado!`
+          );
+        } else if (triage.ambiguous && triage.code) {
+          await sendWhatsAppMessage(
+            senderNumber,
+            `Nao entendi a decisao do caso ${triage.code}. Responda *SIM ${triage.code}* ou *NAO ${triage.code}*, por favor.`
+          );
+        } else {
+          await sendWhatsAppMessage(
+            senderNumber,
+            `Ha caso(s) de triagem aguardando resposta. Responda com o codigo, ex: *SIM ABC* ou *NAO ABC*.`
+          );
+        }
+        return;
+      }
+    }
 
     if (message.type === 'audio' || message.type === 'voice') {
       const audioReplies = [
