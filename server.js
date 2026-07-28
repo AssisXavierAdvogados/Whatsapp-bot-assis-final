@@ -700,14 +700,18 @@ async function executeTool(toolName, toolInput, clientPhone) {
       resumo_caso
     ]);
 
-    // 2) Fallback: texto livre (so funciona se estiver dentro da janela de 24h)
+    // 2) Texto livre — SEMPRE tenta (nao so quando o template falha). Se o template
+    //    estiver pausado/reprovado pela Meta mas houver janela de 24h aberta, o
+    //    especialista ainda recebe. Se nao houver janela, o Meta so rejeita e nada
+    //    se perde. Perder um lead e muito pior que uma eventual mensagem duplicada.
+    try {
+      await sendWhatsAppMessage(specialist.phone, whatsappMsg);
+      console.log(`[Especialista] WhatsApp (texto livre) enviado para ${specialist.name} (template ${templateOk ? 'ok' : 'falhou'})`);
+    } catch (e) {
+      console.error('[Especialista] Erro WhatsApp:', e.message);
+    }
     if (!templateOk) {
-      try {
-        await sendWhatsAppMessage(specialist.phone, whatsappMsg);
-        console.log(`[Especialista] WhatsApp (texto livre) enviado para ${specialist.name}`);
-      } catch (e) {
-        console.error('[Especialista] Erro WhatsApp:', e.message);
-      }
+      console.error(`[Especialista] ATENCAO: template FALHOU para ${specialist.name}. Se estiver fora da janela de 24h, so o email chegou. Verifique o template no Meta.`);
     }
 
     // 3) Email — garantia que sempre chega (com os documentos do cliente anexados)
@@ -1688,11 +1692,14 @@ app.get('/admin/conversations', async (req, res) => {
     const textMsgs = onlyText(msgs);
     if (textMsgs.length > 0) {
       const existing = result[phone] || {};
+      // Usa a data real da ultima mensagem (nao "agora"), senao conversas apenas
+      // carregadas na memoria pulavam para o topo e o painel ficava fora de ordem.
+      const lastTs = textMsgs[textMsgs.length - 1].ts;
       result[phone] = {
         messages: textMsgs,
         meta: conversationMeta[phone] || existing.meta || null,
         handled: existing.handled || false,
-        updated_at: new Date().toISOString()
+        updated_at: lastTs || existing.updated_at || null
       };
     }
   }
