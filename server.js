@@ -2002,6 +2002,30 @@ async function descobrirWabas() {
       (sc.target_ids || []).forEach(id => ids.add(String(id)));
     }
   }
+  if (ids.size) return [...ids];
+
+  // Token com acesso ao negocio inteiro nao traz target_ids. Nesse caso,
+  // lista as contas WhatsApp (proprias e de clientes) dos negocios do token.
+  const tentativas = [
+    { url: 'https://graph.facebook.com/v19.0/me', params: { fields: 'businesses{id,name,owned_whatsapp_business_accounts{id,name},client_whatsapp_business_accounts{id,name}}' } },
+    { url: 'https://graph.facebook.com/v19.0/me/businesses', params: { fields: 'id,name,owned_whatsapp_business_accounts{id,name},client_whatsapp_business_accounts{id,name}' } }
+  ];
+  for (const t of tentativas) {
+    try {
+      const r2 = await axios.get(t.url, {
+        timeout: DIAG_TIMEOUT,
+        params: { ...t.params, access_token: WHATSAPP_TOKEN }
+      });
+      const negocios = r2.data?.businesses?.data || r2.data?.data || [];
+      for (const b of negocios) {
+        (b.owned_whatsapp_business_accounts?.data || []).forEach(w => ids.add(String(w.id)));
+        (b.client_whatsapp_business_accounts?.data || []).forEach(w => ids.add(String(w.id)));
+      }
+      if (ids.size) break;
+    } catch (e) {
+      console.log('[Webhook] Descoberta via', t.url.split('v19.0/')[1], 'falhou:', e.response?.data?.error?.message || e.message);
+    }
+  }
   return [...ids];
 }
 
