@@ -1987,11 +1987,39 @@ async function checarWhatsApp() {
   }
 }
 
+// Descobre, a partir do proprio WHATSAPP_TOKEN, as contas WhatsApp Business (WABA)
+// que ele alcanca. Evita pedir ao usuario que ache o ID no painel da Meta.
+async function descobrirWabas() {
+  if (!WHATSAPP_TOKEN) return [];
+  const r = await axios.get('https://graph.facebook.com/v19.0/debug_token', {
+    timeout: DIAG_TIMEOUT,
+    params: { input_token: WHATSAPP_TOKEN, access_token: WHATSAPP_TOKEN }
+  });
+  const scopes = r.data?.data?.granular_scopes || [];
+  const ids = new Set();
+  for (const sc of scopes) {
+    if (/whatsapp_business_(management|messaging)/.test(sc.scope || '')) {
+      (sc.target_ids || []).forEach(id => ids.add(String(id)));
+    }
+  }
+  return [...ids];
+}
+
 async function checarWebhookMeta(wabaParam) {
-  const wabaId = wabaParam || process.env.WABA_ID;
+  let wabaId = wabaParam || process.env.WABA_ID;
+  if (!wabaId) {
+    try {
+      const achadas = await descobrirWabas();
+      if (achadas.length === 1) wabaId = achadas[0];
+      else if (achadas.length > 1) {
+        return diagResult('Assinatura do webhook na Meta', true,
+          `O token alcanca ${achadas.length} contas (${achadas.join(', ')}). Abra /diagnostico?waba=ID para testar uma delas.`);
+      }
+    } catch (e) { /* cai no aviso abaixo */ }
+  }
   if (!wabaId) {
     return diagResult('Assinatura do webhook na Meta', true,
-      'Nao verificado. Abra /diagnostico?waba=ID_DA_CONTA_WHATSAPP_BUSINESS (ou defina WABA_ID no Render) para testar.');
+      'Nao verificado: nao consegui descobrir o ID da conta pelo token. Abra /diagnostico?waba=ID_DA_CONTA_WHATSAPP_BUSINESS para testar.');
   }
   try {
     const r = await axios.get(
@@ -2098,7 +2126,7 @@ app.get('/diagnostico.json', async (req, res) => {
 });
 
 app.get('/diagnostico', async (req, res) => {
-  if (!diagAutorizado(req)) return res.status(401).send('Acesso negado. Use /diagnostico?token=SUA_SENHA');
+  if (!diagAutorizado(req)) return res.status(401).send(DIAG_SEM_SENHA);
   const r = await rodarDiagnostico({ waba: req.query.waba });
   const linhas = r.checks.map(c => `
     <div class="card ${c.ok ? 'ok' : 'err'}">
@@ -2134,9 +2162,14 @@ ${linhas}
 // assinatura cai, a Meta para de entregar as mensagens dos clientes ao servidor
 // e a Ana fica muda. Roda AQUI (no Render) porque o servidor tem o token.
 // Use: /admin/assinar-webhook?token=ADMIN_PASSWORD&waba=ID_DA_CONTA_WHATSAPP_BUSINESS
+const DIAG_SEM_SENHA = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Senha necessaria</title><style>body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:18px;background:#0b141a;color:#e9edef;font-size:15px}code{background:#202c33;padding:2px 6px;border-radius:4px}</style></head>
+<body><h2>Falta a senha do painel</h2><p>Adicione <code>?token=SENHA</code> no fim do endereco.</p>
+<p><b>Onde achar a senha:</b> dashboard.render.com &gt; servico <i>assis-xavier-whatsapp-bot</i> &gt; aba <b>Environment</b> &gt; linha <b>ADMIN_PASSWORD</b> &gt; toque no icone de olho para revelar.</p></body></html>`;
+
 app.get('/admin/assinar-webhook', async (req, res) => {
-  if (!diagAutorizado(req)) return res.status(401).send('Acesso negado. Use ?token=SUA_SENHA');
-  const wabaId = (req.query.waba || process.env.WABA_ID || '').toString().trim();
+  if (!diagAutorizado(req)) return res.status(401).send(DIAG_SEM_SENHA);
+  let wabaId = (req.query.waba || process.env.WABA_ID || '').toString().trim();
   const esc = v => String(v).replace(/</g, '&lt;');
   const pagina = (cor, titulo, corpo) => `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Assinar webhook</title>
@@ -2147,21 +2180,37 @@ a{color:#00a884}</style></head><body><h2>Assinatura do webhook</h2>
 <div class="box ${cor}"><b>${titulo}</b></div><div class="box info">${corpo}</div>
 <a href="/diagnostico?token=${encodeURIComponent(req.query.token || '')}&waba=${encodeURIComponent(wabaId)}">Rodar o diagnostico completo</a></body></html>`;
 
-  if (!wabaId) {
-    return res.send(pagina('err', 'Falta o ID da conta do WhatsApp Business (WABA).',
-      'Abra developers.facebook.com > seu app > Casos de uso > Conectar-se com clientes pelo WhatsApp > Inicio rapido/Configuracao da API: copie o "ID da conta do WhatsApp Business" e adicione na URL: <br><code>/admin/assinar-webhook?token=SUA_SENHA&amp;waba=ID_COPIADO</code>'));
-  }
   if (!WHATSAPP_TOKEN) {
     return res.send(pagina('err', 'WHATSAPP_TOKEN nao esta definido no servidor.', 'Preencha no painel do Render > Environment.'));
   }
+  let descobertas = [];
+  if (!wabaId) {
+    try { descobertas = await descobrirWabas(); } catch (e) {
+      const err = e.response?.data?.error || {};
+      console.error('[Webhook] Falha ao descobrir WABA:', JSON.stringify(err) || e.message);
+      if (err.code === 190) {
+        return res.send(pagina('err', 'O token do WhatsApp (WHATSAPP_TOKEN) esta expirado ou invalido.',
+          `A Meta respondeu: ${esc(err.message)}<br><br><b>O que fazer:</b> gerar um token permanente e colar no Render em WHATSAPP_TOKEN. Passo a passo: business.facebook.com &gt; Configuracoes do negocio &gt; Usuarios &gt; Usuarios do sistema &gt; Adicionar (tipo Admin) &gt; Gerar novo token &gt; escolher o app &quot;Ana - Assis Xavier&quot; &gt; marcar whatsapp_business_messaging e whatsapp_business_management &gt; expiracao: Nunca &gt; Gerar. Depois: Atribuir ativos &gt; Contas do WhatsApp &gt; marcar a conta &gt; Controle total.`));
+      }
+    }
+    if (descobertas.length) wabaId = descobertas.join(',');
+  }
+  if (!wabaId) {
+    return res.send(pagina('err', 'Nao consegui descobrir o ID da conta do WhatsApp Business (WABA) pelo token.',
+      'Abra developers.facebook.com > seu app > Casos de uso > Conectar-se com clientes pelo WhatsApp > Inicio rapido/Configuracao da API: copie o "ID da conta do WhatsApp Business" e adicione na URL: <br><code>/admin/assinar-webhook?token=SUA_SENHA&amp;waba=ID_COPIADO</code>'));
+  }
   const headers = { Authorization: `Bearer ${WHATSAPP_TOKEN}` };
   try {
-    const sub = await axios.post(`https://graph.facebook.com/v19.0/${wabaId}/subscribed_apps`, {}, { timeout: DIAG_TIMEOUT, headers });
-    const lista = await axios.get(`https://graph.facebook.com/v19.0/${wabaId}/subscribed_apps`, { timeout: DIAG_TIMEOUT, headers });
-    const apps = lista.data?.data || [];
-    console.log('[Webhook] Reassinatura executada:', JSON.stringify(sub.data), 'apps:', apps.length);
+    const linhas = [];
+    for (const id of wabaId.split(',').map(x => x.trim()).filter(Boolean)) {
+      const sub = await axios.post(`https://graph.facebook.com/v19.0/${id}/subscribed_apps`, {}, { timeout: DIAG_TIMEOUT, headers });
+      const lista = await axios.get(`https://graph.facebook.com/v19.0/${id}/subscribed_apps`, { timeout: DIAG_TIMEOUT, headers });
+      const apps = lista.data?.data || [];
+      console.log(`[Webhook] Reassinatura na conta ${id}:`, JSON.stringify(sub.data), 'apps:', apps.length);
+      linhas.push(`Conta ${esc(id)}: resposta da Meta <code>${esc(JSON.stringify(sub.data))}</code> — aplicativos assinados agora: <b>${apps.length}</b> (${esc(apps.map(a => a.whatsapp_business_api_data?.name || a.id).join(', ') || 'nenhum')})`);
+    }
     return res.send(pagina('ok', 'Webhook reassinado com sucesso.',
-      `Resposta da Meta: <code>${esc(JSON.stringify(sub.data))}</code><br><br>Aplicativos assinados agora: <b>${apps.length}</b> — ${esc(apps.map(a => a.whatsapp_business_api_data?.name || a.id).join(', ') || 'nenhum')}.<br><br>Mande "oi" para a Ana de outro celular e aguarde 15 segundos.`));
+      linhas.join('<br><br>') + '<br><br>Agora mande "oi" para a Ana de outro celular e aguarde 15 segundos.'));
   } catch (e) {
     const err = e.response?.data?.error || {};
     console.error('[Webhook] Falha ao reassinar:', JSON.stringify(err) || e.message);
