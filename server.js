@@ -1987,11 +1987,11 @@ async function checarWhatsApp() {
   }
 }
 
-async function checarWebhookMeta() {
-  const wabaId = process.env.WABA_ID;
+async function checarWebhookMeta(wabaParam) {
+  const wabaId = wabaParam || process.env.WABA_ID;
   if (!wabaId) {
     return diagResult('Assinatura do webhook na Meta', true,
-      'Nao verificado (defina WABA_ID no Render para que este teste rode automaticamente).');
+      'Nao verificado. Abra /diagnostico?waba=ID_DA_CONTA_WHATSAPP_BUSINESS (ou defina WABA_ID no Render) para testar.');
   }
   try {
     const r = await axios.get(
@@ -2073,9 +2073,9 @@ function checarVariaveis() {
   return diagResult('Variaveis de ambiente', true, detalhe);
 }
 
-async function rodarDiagnostico() {
+async function rodarDiagnostico(opts = {}) {
   const [claude, whats, webhook, supa, email] = await Promise.all([
-    checarClaude(), checarWhatsApp(), checarWebhookMeta(), checarSupabase(), checarEmail()
+    checarClaude(), checarWhatsApp(), checarWebhookMeta(opts.waba), checarSupabase(), checarEmail()
   ]);
   const checks = [checarVariaveis(), claude, whats, webhook, supa, email];
   const criticos = [checks[0], claude, whats, webhook];
@@ -2094,12 +2094,12 @@ function diagAutorizado(req) {
 
 app.get('/diagnostico.json', async (req, res) => {
   if (!diagAutorizado(req)) return res.status(401).json({ erro: 'Acesso negado. Use ?token=SUA_SENHA' });
-  res.json(await rodarDiagnostico());
+  res.json(await rodarDiagnostico({ waba: req.query.waba }));
 });
 
 app.get('/diagnostico', async (req, res) => {
   if (!diagAutorizado(req)) return res.status(401).send('Acesso negado. Use /diagnostico?token=SUA_SENHA');
-  const r = await rodarDiagnostico();
+  const r = await rodarDiagnostico({ waba: req.query.waba });
   const linhas = r.checks.map(c => `
     <div class="card ${c.ok ? 'ok' : 'err'}">
       <div class="t">${c.ok ? '&#9989;' : '&#10060;'} ${c.nome}</div>
@@ -2128,6 +2128,50 @@ h1{font-size:20px;margin:0 0 4px}
 ${linhas}
 <div class="sub" style="margin-top:16px">Versao em dados: <a style="color:#00a884" href="/diagnostico.json${ADMIN_PASSWORD ? '?token=' + encodeURIComponent(req.query.token || '') : ''}">/diagnostico.json</a></div>
 </body></html>`);
+});
+
+// Reassina o app no webhook da conta WhatsApp Business (WABA). Quando essa
+// assinatura cai, a Meta para de entregar as mensagens dos clientes ao servidor
+// e a Ana fica muda. Roda AQUI (no Render) porque o servidor tem o token.
+// Use: /admin/assinar-webhook?token=ADMIN_PASSWORD&waba=ID_DA_CONTA_WHATSAPP_BUSINESS
+app.get('/admin/assinar-webhook', async (req, res) => {
+  if (!diagAutorizado(req)) return res.status(401).send('Acesso negado. Use ?token=SUA_SENHA');
+  const wabaId = (req.query.waba || process.env.WABA_ID || '').toString().trim();
+  const esc = v => String(v).replace(/</g, '&lt;');
+  const pagina = (cor, titulo, corpo) => `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Assinar webhook</title>
+<style>body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:18px;background:#0b141a;color:#e9edef}
+.box{padding:14px;border-radius:10px;margin-bottom:12px;font-size:15px;word-break:break-word}
+.ok{background:#0d3b2e;color:#4ade80}.err{background:#3b0d0d;color:#f87171}.info{background:#202c33;color:#d1d7db}
+a{color:#00a884}</style></head><body><h2>Assinatura do webhook</h2>
+<div class="box ${cor}"><b>${titulo}</b></div><div class="box info">${corpo}</div>
+<a href="/diagnostico?token=${encodeURIComponent(req.query.token || '')}&waba=${encodeURIComponent(wabaId)}">Rodar o diagnostico completo</a></body></html>`;
+
+  if (!wabaId) {
+    return res.send(pagina('err', 'Falta o ID da conta do WhatsApp Business (WABA).',
+      'Abra developers.facebook.com > seu app > Casos de uso > Conectar-se com clientes pelo WhatsApp > Inicio rapido/Configuracao da API: copie o "ID da conta do WhatsApp Business" e adicione na URL: <br><code>/admin/assinar-webhook?token=SUA_SENHA&amp;waba=ID_COPIADO</code>'));
+  }
+  if (!WHATSAPP_TOKEN) {
+    return res.send(pagina('err', 'WHATSAPP_TOKEN nao esta definido no servidor.', 'Preencha no painel do Render > Environment.'));
+  }
+  const headers = { Authorization: `Bearer ${WHATSAPP_TOKEN}` };
+  try {
+    const sub = await axios.post(`https://graph.facebook.com/v19.0/${wabaId}/subscribed_apps`, {}, { timeout: DIAG_TIMEOUT, headers });
+    const lista = await axios.get(`https://graph.facebook.com/v19.0/${wabaId}/subscribed_apps`, { timeout: DIAG_TIMEOUT, headers });
+    const apps = lista.data?.data || [];
+    console.log('[Webhook] Reassinatura executada:', JSON.stringify(sub.data), 'apps:', apps.length);
+    return res.send(pagina('ok', 'Webhook reassinado com sucesso.',
+      `Resposta da Meta: <code>${esc(JSON.stringify(sub.data))}</code><br><br>Aplicativos assinados agora: <b>${apps.length}</b> — ${esc(apps.map(a => a.whatsapp_business_api_data?.name || a.id).join(', ') || 'nenhum')}.<br><br>Mande "oi" para a Ana de outro celular e aguarde 15 segundos.`));
+  } catch (e) {
+    const err = e.response?.data?.error || {};
+    console.error('[Webhook] Falha ao reassinar:', JSON.stringify(err) || e.message);
+    let dica = 'Confira o ID da conta e o token.';
+    if (err.code === 190) dica = 'O WHATSAPP_TOKEN esta expirado/invalido. Gere um token permanente (Usuario do sistema no Gerenciador de Negocios) e atualize no Render.';
+    else if (err.code === 100) dica = 'O ID da conta do WhatsApp Business parece errado. Copie o "ID da conta do WhatsApp Business" (nao o Phone Number ID nem o ID do app).';
+    else if (err.code === 200 || err.code === 10) dica = 'O token nao tem a permissao whatsapp_business_management. Gere um novo token com whatsapp_business_messaging e whatsapp_business_management.';
+    return res.send(pagina('err', 'A Meta recusou a assinatura.',
+      `Erro${err.code ? ' (codigo ' + err.code + ')' : ''}: ${esc(err.message || e.message)}<br><br><b>O que fazer:</b> ${dica}`));
+  }
 });
 // =================== FIM DO DIAGNOSTICO ===================
 
