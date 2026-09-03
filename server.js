@@ -1893,6 +1893,244 @@ app.get('/admin/test-notify-page', async (req, res) => {
   res.send(html);
 });
 
+// ===================== DIAGNOSTICO =====================
+// Testa de verdade cada peca de que a Ana depende (Claude, Meta WhatsApp,
+// Supabase, Brevo) e diz, em portugues, qual esta quebrada e o que fazer.
+// Use: /diagnostico  (HTML)  ou  /diagnostico.json
+// Se ADMIN_PASSWORD estiver definida, exige ?token=SUA_SENHA.
+
+const DIAG_TIMEOUT = 15000;
+
+function diagResult(nome, ok, detalhe, acao) {
+  return { nome, ok, detalhe, acao: ok ? null : acao };
+}
+
+async function checarClaude() {
+  if (!CLAUDE_API_KEY) {
+    return diagResult('Claude (cerebro da Ana)', false, 'CLAUDE_API_KEY nao esta definida no servidor.',
+      'No painel do Render > Environment, adicione CLAUDE_API_KEY com a chave de console.anthropic.com > API Keys.');
+  }
+  try {
+    await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      { model: 'claude-opus-4-8', max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] },
+      {
+        timeout: DIAG_TIMEOUT,
+        headers: {
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        }
+      }
+    );
+    return diagResult('Claude (cerebro da Ana)', true, 'Respondeu normalmente.');
+  } catch (e) {
+    const status = e.response?.status;
+    const msg = e.response?.data?.error?.message || e.message;
+    if (status === 401 || status === 403) {
+      return diagResult('Claude (cerebro da Ana)', false, `Chave recusada (HTTP ${status}): ${msg}`,
+        'A CLAUDE_API_KEY esta invalida ou foi revogada. Gere uma nova em console.anthropic.com > API Keys e substitua no Render.');
+    }
+    if (status === 400 && /credit|balance|quota/i.test(msg)) {
+      return diagResult('Claude (cerebro da Ana)', false, `Sem creditos: ${msg}`,
+        'Adicione creditos em console.anthropic.com > Billing. A Ana volta a responder assim que houver saldo.');
+    }
+    if (status === 404) {
+      return diagResult('Claude (cerebro da Ana)', false, `Modelo recusado: ${msg}`,
+        'O modelo configurado nao existe mais para esta conta. Avise para trocarmos o ID do modelo no codigo.');
+    }
+    if (status === 429) {
+      return diagResult('Claude (cerebro da Ana)', false, `Limite de uso atingido: ${msg}`,
+        'Aguarde alguns minutos ou aumente o limite em console.anthropic.com > Limits.');
+    }
+    return diagResult('Claude (cerebro da Ana)', false, `Erro${status ? ' HTTP ' + status : ''}: ${msg}`,
+      'Verifique a chave e os creditos em console.anthropic.com.');
+  }
+}
+
+async function checarWhatsApp() {
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+    return diagResult('WhatsApp (Meta Cloud API)', false,
+      `Faltando: ${!WHATSAPP_TOKEN ? 'WHATSAPP_TOKEN ' : ''}${!PHONE_NUMBER_ID ? 'PHONE_NUMBER_ID' : ''}`,
+      'No painel do Render > Environment, preencha as variaveis que faltam com os dados de developers.facebook.com > WhatsApp > API Setup.');
+  }
+  try {
+    const r = await axios.get(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}`,
+      {
+        timeout: DIAG_TIMEOUT,
+        params: { fields: 'display_phone_number,verified_name,quality_rating,name_status' },
+        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+      }
+    );
+    const d = r.data || {};
+    return diagResult('WhatsApp (Meta Cloud API)', true,
+      `Numero ${d.display_phone_number || '?'} (${d.verified_name || 'sem nome'}) — qualidade: ${d.quality_rating || 'n/d'}.`);
+  } catch (e) {
+    const err = e.response?.data?.error || {};
+    const code = err.code;
+    const msg = err.message || e.message;
+    if (code === 190) {
+      return diagResult('WhatsApp (Meta Cloud API)', false, `Token expirado ou invalido: ${msg}`,
+        'ESTA E A CAUSA MAIS COMUM. O token temporario da Meta dura 24h. Gere um TOKEN PERMANENTE: developers.facebook.com > Configuracoes do Negocio > Usuarios do sistema > criar usuario admin > Gerar novo token > selecionar o app > permissoes whatsapp_business_messaging e whatsapp_business_management > sem expiracao. Depois cole em WHATSAPP_TOKEN no Render.');
+    }
+    if (code === 100) {
+      return diagResult('WhatsApp (Meta Cloud API)', false, `Numero nao encontrado: ${msg}`,
+        'O PHONE_NUMBER_ID esta errado. Copie o "Phone number ID" em developers.facebook.com > WhatsApp > API Setup e atualize no Render.');
+    }
+    if (code === 200 || code === 10) {
+      return diagResult('WhatsApp (Meta Cloud API)', false, `Sem permissao: ${msg}`,
+        'O token nao tem as permissoes whatsapp_business_messaging e whatsapp_business_management. Gere um novo token com essas duas permissoes.');
+    }
+    return diagResult('WhatsApp (Meta Cloud API)', false, `Erro${code ? ' (codigo ' + code + ')' : ''}: ${msg}`,
+      'Confira o token e o Phone Number ID em developers.facebook.com > WhatsApp > API Setup.');
+  }
+}
+
+async function checarWebhookMeta() {
+  const wabaId = process.env.WABA_ID;
+  if (!wabaId) {
+    return diagResult('Assinatura do webhook na Meta', true,
+      'Nao verificado (defina WABA_ID no Render para que este teste rode automaticamente).');
+  }
+  try {
+    const r = await axios.get(
+      `https://graph.facebook.com/v19.0/${wabaId}/subscribed_apps`,
+      { timeout: DIAG_TIMEOUT, headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+    );
+    const apps = r.data?.data || [];
+    if (!apps.length) {
+      return diagResult('Assinatura do webhook na Meta', false, 'Nenhum aplicativo assinado neste numero.',
+        'As mensagens dos clientes nao chegam ate a Ana. Em developers.facebook.com > WhatsApp > Configuracao, reassine o webhook e marque o campo "messages".');
+    }
+    return diagResult('Assinatura do webhook na Meta', true,
+      `${apps.length} aplicativo(s) assinado(s): ${apps.map(a => a.whatsapp_business_api_data?.name || a.id).join(', ')}.`);
+  } catch (e) {
+    const msg = e.response?.data?.error?.message || e.message;
+    return diagResult('Assinatura do webhook na Meta', false, `Nao foi possivel consultar: ${msg}`,
+      'Confira o WABA_ID e as permissoes do token.');
+  }
+}
+
+async function checarSupabase() {
+  if (!supabaseEnabled()) {
+    return diagResult('Supabase (memoria das conversas)', false, 'SUPABASE_URL e/ou SUPABASE_KEY nao definidas.',
+      'Sem isso a Ana esquece as conversas a cada reinicio do servidor, mas continua respondendo. Preencha no Render > Environment.');
+  }
+  try {
+    await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?select=phone&limit=1`,
+      { timeout: DIAG_TIMEOUT, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    return diagResult('Supabase (memoria das conversas)', true, 'Banco respondendo.');
+  } catch (e) {
+    const status = e.response?.status;
+    const msg = e.response?.data?.message || e.response?.data?.error || e.message;
+    if (status === 401 || status === 403) {
+      return diagResult('Supabase (memoria das conversas)', false, `Chave recusada (HTTP ${status}): ${msg}`,
+        'Gere a chave em supabase.com > Project Settings > API e atualize SUPABASE_KEY no Render.');
+    }
+    return diagResult('Supabase (memoria das conversas)', false, `Erro${status ? ' HTTP ' + status : ''}: ${msg}`,
+      'O projeto pode estar pausado por inatividade. Entre em supabase.com, abra o projeto e clique em "Restore"/"Resume".');
+  }
+}
+
+async function checarEmail() {
+  if (!BREVO_API_KEY) {
+    return diagResult('E-mail aos especialistas (Brevo)', false, 'BREVO_API_KEY nao definida.',
+      'Sem isso os especialistas nao recebem o e-mail do caso (o WhatsApp continua funcionando). Preencha no Render > Environment.');
+  }
+  try {
+    const r = await axios.get('https://api.brevo.com/v3/account',
+      { timeout: DIAG_TIMEOUT, headers: { 'api-key': BREVO_API_KEY, accept: 'application/json' } });
+    return diagResult('E-mail aos especialistas (Brevo)', true,
+      `Conta ${r.data?.email || 'ok'} ativa. Remetente configurado: ${EMAIL_FROM || 'NAO DEFINIDO'}.`);
+  } catch (e) {
+    const status = e.response?.status;
+    const msg = e.response?.data?.message || e.message;
+    return diagResult('E-mail aos especialistas (Brevo)', false, `Erro${status ? ' HTTP ' + status : ''}: ${msg}`,
+      'Verifique a chave em app.brevo.com > SMTP & API > API Keys e atualize BREVO_API_KEY no Render.');
+  }
+}
+
+function checarVariaveis() {
+  // Criticas: sem elas a Ana simplesmente nao responde.
+  const criticas = [];
+  if (!CLAUDE_API_KEY) criticas.push('CLAUDE_API_KEY');
+  if (!WHATSAPP_TOKEN) criticas.push('WHATSAPP_TOKEN');
+  if (!PHONE_NUMBER_ID) criticas.push('PHONE_NUMBER_ID');
+  // Secundarias: a Ana responde, mas algum recurso fica capenga.
+  const avisos = [];
+  if (!ADMIN_PASSWORD) avisos.push('ADMIN_PASSWORD (o painel /admin fica inacessivel)');
+  if (!LEAD_TEMPLATE_NAME) avisos.push('LEAD_TEMPLATE_NAME (aviso ao especialista fora da janela de 24h)');
+  if (criticas.length) {
+    return diagResult('Variaveis de ambiente', false, `Faltando (critico): ${criticas.join(', ')}.`,
+      'Preencha no painel do Render > seu servico > Environment > Add Environment Variable e salve (o servico reinicia sozinho).');
+  }
+  const detalhe = avisos.length
+    ? `Essenciais OK. Pendencias menores: ${avisos.join('; ')}.`
+    : 'Todas preenchidas.';
+  return diagResult('Variaveis de ambiente', true, detalhe);
+}
+
+async function rodarDiagnostico() {
+  const [claude, whats, webhook, supa, email] = await Promise.all([
+    checarClaude(), checarWhatsApp(), checarWebhookMeta(), checarSupabase(), checarEmail()
+  ]);
+  const checks = [checarVariaveis(), claude, whats, webhook, supa, email];
+  const criticos = [checks[0], claude, whats, webhook];
+  return {
+    momento: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+    ana_no_ar: criticos.every(c => c.ok),
+    servidor: 'online (se voce esta lendo isto, o Render esta rodando)',
+    checks
+  };
+}
+
+function diagAutorizado(req) {
+  if (!ADMIN_PASSWORD) return true; // sem senha configurada, nao ha o que exigir
+  return req.query.token === ADMIN_PASSWORD;
+}
+
+app.get('/diagnostico.json', async (req, res) => {
+  if (!diagAutorizado(req)) return res.status(401).json({ erro: 'Acesso negado. Use ?token=SUA_SENHA' });
+  res.json(await rodarDiagnostico());
+});
+
+app.get('/diagnostico', async (req, res) => {
+  if (!diagAutorizado(req)) return res.status(401).send('Acesso negado. Use /diagnostico?token=SUA_SENHA');
+  const r = await rodarDiagnostico();
+  const linhas = r.checks.map(c => `
+    <div class="card ${c.ok ? 'ok' : 'err'}">
+      <div class="t">${c.ok ? '&#9989;' : '&#10060;'} ${c.nome}</div>
+      <div class="d">${String(c.detalhe).replace(/</g, '&lt;')}</div>
+      ${c.acao ? `<div class="a"><b>O que fazer:</b> ${String(c.acao).replace(/</g, '&lt;')}</div>` : ''}
+    </div>`).join('');
+  res.send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagnostico da Ana</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Arial,sans-serif;margin:0;padding:18px;background:#0b141a;color:#e9edef}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:#8696a0;font-size:13px;margin-bottom:16px}
+.status{padding:14px;border-radius:10px;font-weight:700;margin-bottom:16px;font-size:16px}
+.up{background:#0d3b2e;color:#4ade80}.down{background:#3b0d0d;color:#f87171}
+.card{background:#202c33;border-radius:10px;padding:14px;margin-bottom:10px;border-left:4px solid #8696a0}
+.card.ok{border-left-color:#00a884}.card.err{border-left-color:#ef4444}
+.t{font-weight:700;margin-bottom:6px}
+.d{font-size:14px;color:#d1d7db;word-break:break-word}
+.a{margin-top:10px;font-size:14px;background:#111b21;padding:10px;border-radius:8px;color:#ffd28a}
+</style></head><body>
+<h1>Diagnostico da Ana</h1>
+<div class="sub">${r.momento}</div>
+<div class="status ${r.ana_no_ar ? 'up' : 'down'}">
+  ${r.ana_no_ar ? 'ANA ESTA FUNCIONANDO — todos os testes essenciais passaram.' : 'ANA ESTA FORA DO AR — veja abaixo o item em vermelho.'}
+</div>
+${linhas}
+<div class="sub" style="margin-top:16px">Versao em dados: <a style="color:#00a884" href="/diagnostico.json${ADMIN_PASSWORD ? '?token=' + encodeURIComponent(req.query.token || '') : ''}">/diagnostico.json</a></div>
+</body></html>`);
+});
+// =================== FIM DO DIAGNOSTICO ===================
+
 app.listen(PORT, () => {
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
