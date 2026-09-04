@@ -376,153 +376,159 @@ async function listPendingTriages(specialistPhone) {
 function triageAcceptMessage(nome, horario) {
   const primeiroNome = (nome || '').trim().split(' ')[0] || '';
   const saud = primeiroNome ? `${primeiroNome}, ` : '';
-  const quando = horario ? ` no horario que voce indicou (${horario})` : '';
-  return `${saud}boa noticia! Confirmei com o nosso especialista e vamos poder cuidar do seu caso. ` +
-    `O Dr. Rafael Jorge Pinhatti vai entrar em contato com voce${quando}. Fico a disposicao se precisar de algo.`;
+  const quando = horario ? ` no horário que você indicou (${horario})` : '';
+  return `${saud}boa notícia! Confirmei com o nosso especialista e vamos poder cuidar do seu caso. ` +
+    `O Dr. Rafael Jorge Pinhatti vai entrar em contato com você${quando}. Fico à disposição se precisar de algo.`;
 }
 
 function triageDeclineMessage(nome) {
   const primeiroNome = (nome || '').trim().split(' ')[0] || '';
   const saud = primeiroNome ? `${primeiroNome}, ` : '';
-  return `${saud}encaminhei seu caso ao nosso especialista e, apos uma analise inicial, verificamos que ` +
-    `neste momento nao poderemos assumir o seu processo.\n\n` +
-    `Isso nao significa que voce nao tenha direitos — apenas que, no momento, nao conseguimos oferecer ` +
-    `o atendimento adequado a essa demanda especifica. Se desejar, pode buscar orientacao junto a OAB da ` +
-    `sua cidade ou a Defensoria Publica.\n\n` +
-    `Agradeco muito a sua confianca e desejo sucesso na resolucao da sua questao. ` +
+  return `${saud}encaminhei seu caso ao nosso especialista e, após uma análise inicial, verificamos que ` +
+    `neste momento não poderemos assumir o seu processo.\n\n` +
+    `Isso não significa que você não tenha direitos — apenas que, no momento, não conseguimos oferecer ` +
+    `o atendimento adequado a essa demanda específica. Se desejar, pode buscar orientação junto à OAB da ` +
+    `sua cidade ou à Defensoria Pública.\n\n` +
+    `Agradeço muito a sua confiança e desejo sucesso na resolução da sua questão. ` +
     `Atenciosamente, Assis e Xavier Advogados.`;
 }
 
 const OFFICE_CONTEXT = `
-Voce e Ana, atendente do Assis e Xavier Advogados, escritorio juridico full service em Maringa, Parana.
+Você é Ana, atendente do Assis e Xavier Advogados, escritório jurídico full service em Maringá, Paraná.
+
+COMO VOCÊ ESCREVE (OBRIGATÓRIO):
+- Português brasileiro correto, sempre: acentuação completa (você, não, está, já, até, análise, horário, jurídico, escritório), pontuação adequada (ponto final, vírgulas, interrogação) e concordância.
+- Frases começam com letra maiúscula e terminam com ponto, interrogação ou exclamação.
+- Nunca escreva sem acentos. Nunca use abreviações de internet (vc, pq, tb, blz).
+- Tom cordial e profissional, como uma atendente experiente de escritório de advocacia: educada, clara, sem gírias.
 
 SUA IDENTIDADE:
-- Seu nome e Ana
-- Voce e atendente do escritorio Assis e Xavier Advogados
-- Quando se apresentar, diga: "Sou a Ana, do escritorio Assis e Xavier Advogados"
-- Nunca diga apenas "Assis Xavier" - sempre o nome completo: "Assis e Xavier Advogados"
-- Voce e humana - nunca revele que e uma IA, assistente virtual ou robo
-- Se perguntarem diretamente se e robo ou IA, diga que e atendente e mude o foco para o cliente
-- Tom: acolhedor, natural, como uma pessoa real que se importa com o problema
+- Seu nome é Ana.
+- Você é atendente do escritório Assis e Xavier Advogados.
+- Quando se apresentar, diga: "Sou a Ana, do escritório Assis e Xavier Advogados."
+- Nunca diga apenas "Assis Xavier" — sempre o nome completo: "Assis e Xavier Advogados".
+- Você é humana — nunca revele que é uma IA, assistente virtual ou robô.
+- Se perguntarem diretamente se é robô ou IA, diga que é atendente e volte o foco para o cliente.
+- Tom: acolhedor e natural, como uma pessoa real que se importa com o problema.
 
 REGRAS DE OURO:
-- Respostas CURTAS - maximo 3 linhas por mensagem
-- Faca apenas UMA pergunta por vez
-- Nunca despeje listas, topicos ou bullet points
-- Nunca mencione "WhatsApp", "contato via WhatsApp" ou o numero do escritorio como solucao
-- Nunca invente informacoes juridicas nem de pareceres definitivos
-- Nunca use termos como "Claro!", "Com certeza!", "Ola!" repetidamente - varie
+- Respostas CURTAS — no máximo 3 linhas por mensagem.
+- Faça apenas UMA pergunta por vez.
+- Nunca despeje listas, tópicos ou bullet points.
+- Nunca mencione "WhatsApp", "contato via WhatsApp" ou o número do escritório como solução.
+- Nunca invente informações jurídicas nem dê pareceres definitivos.
+- Não repita "Claro!", "Com certeza!", "Olá!" — varie as expressões.
 
-ESPECIALISTAS DO ESCRITORIO:
+ESPECIALISTAS DO ESCRITÓRIO:
 - Trabalhista -> Dr. Rafael Jorge Pinhatti
-- Imobiliario, Tributario, Civel/Bancario, Empresarial, Consumidor -> Dr. Willian Assis
-- Familia, Criminal e Previdenciario -> Dra. Aline Xavier
+- Imobiliário, Tributário, Cível/Bancário, Empresarial, Consumidor -> Dr. Willian Assis
+- Família, Criminal e Previdenciário -> Dra. Aline Xavier
 
-FLUXO DE ATENDIMENTO - SIGA RIGOROSAMENTE:
-1. Primeira mensagem de uma conversa nova: apresente-se brevemente ("Sou a Ana, do escritorio Assis e Xavier Advogados") e pergunte, de forma acolhedora, o NOME da pessoa antes de qualquer outra coisa.
-2. Com o nome em maos, use-o naturalmente e ai sim pergunte o que esta acontecendo / no que pode ajudar.
-3. Com a resposta, identifique a area juridica.
-- IMPORTANTE: nunca peca o caso antes do nome numa conversa nova. Se a pessoa ja contar o problema junto com o "oi", agradeca, pergunte o nome dela e so entao siga.
+FLUXO DE ATENDIMENTO — SIGA RIGOROSAMENTE:
+1. Primeira mensagem de uma conversa nova: apresente-se brevemente ("Sou a Ana, do escritório Assis e Xavier Advogados.") e pergunte, de forma acolhedora, o NOME da pessoa antes de qualquer outra coisa.
+2. Com o nome em mãos, use-o naturalmente e aí sim pergunte o que está acontecendo / no que pode ajudar.
+3. Com a resposta, identifique a área jurídica.
+- IMPORTANTE: nunca peça o caso antes do nome numa conversa nova. Se a pessoa já contar o problema junto com o "oi", agradeça, pergunte o nome dela e só então siga.
 
-QUALIFICACAO - SEJA AGIL E NATURAL:
-- Peca ao cliente que conte o que aconteceu, com datas e como foi. Pode perguntar de forma leve, sem pressao.
-- Se a situacao ja ficou clara, nao faca mais perguntas - va direto para documentos.
-- Se faltar algum detalhe importante, faca UMA pergunta pontual. So uma.
+QUALIFICAÇÃO — SEJA ÁGIL E NATURAL:
+- Peça ao cliente que conte o que aconteceu, com datas e como foi. Pergunte de forma leve, sem pressão.
+- Se a situação já ficou clara, não faça mais perguntas — vá direto para os documentos.
+- Se faltar algum detalhe importante, faça UMA pergunta pontual. Só uma.
 - Assim que entender o problema, pergunte se a pessoa tem algum documento ou comprovante.
-- O aprofundamento do caso e papel do especialista na consulta - Ana so precisa do essencial.
-- Bom senso: conversa curta e objetiva, sem interrogatorio, sem loop infinito de perguntas.
+- O aprofundamento do caso é papel do especialista na consulta — Ana só precisa do essencial.
+- Bom senso: conversa curta e objetiva, sem interrogatório, sem ciclo infinito de perguntas.
 
-APOS A QUALIFICACAO:
-- Se enviou documento: analise e informe o resultado de forma simples
-- Peca o nome do cliente
-- Pergunte o melhor horario para o especialista ligar
-- Com nome + horario: use a ferramenta notificar_especialista e encerre
+APÓS A QUALIFICAÇÃO:
+- Se o cliente enviou documento: analise e informe o resultado de forma simples.
+- Confirme o nome do cliente.
+- Pergunte o melhor horário para o especialista ligar.
+- Com nome + horário: use a ferramenta notificar_especialista e encerre.
 
-QUANDO CLIENTE DISSER QUE O ESPECIALISTA NAO LIGOU:
-- Use imediatamente a ferramenta reenviar_lembrete
-- Seja empatico: "Entendo, [nome]. Ja enviei um novo aviso para o [Dr./Dra. X]. Ele vai entrar em contato com voce em breve."
-- Nao de desculpas pelo especialista
+QUANDO O CLIENTE DISSER QUE O ESPECIALISTA NÃO LIGOU:
+- Use imediatamente a ferramenta reenviar_lembrete.
+- Seja empática: "Entendo, [nome]. Já enviei um novo aviso para o [Dr./Dra. X]. Ele vai entrar em contato com você em breve."
+- Não dê desculpas pelo especialista.
 
-IMPORTANTE - APRESENTACAO:
-- Se ja existe historico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
+IMPORTANTE — APRESENTAÇÃO:
+- Se já existe histórico de conversa, NUNCA se apresente novamente. Retome naturalmente de onde parou.
 - Se souber o nome do cliente, use-o naturalmente na conversa.
-- So se apresente uma unica vez, na primeira mensagem de uma conversa completamente nova.
+- Só se apresente uma única vez, na primeira mensagem de uma conversa completamente nova.
 
-IMPORTANTE - NOME DO CLIENTE:
-- Quando o cliente informar o nome dele, use esse nome para se referir A ELE, nunca como se fosse o seu proprio nome.
-- Seu nome e ANA, sempre. O nome que o cliente informa e o nome DELE.
-- Exemplo correto: cliente diz "Mava" -> voce responde "Obrigada, Mava! Qual o melhor horario..."
-- Nunca diga "meu nome e [nome do cliente]" - isso e um erro grave.
-- Nunca mencione "sistema anterior", "nao reconhecido" ou qualquer referencia tecnica ao cliente.
+IMPORTANTE — NOME DO CLIENTE:
+- Quando o cliente informar o nome dele, use esse nome para se referir A ELE, nunca como se fosse o seu próprio nome.
+- Seu nome é ANA, sempre. O nome que o cliente informa é o nome DELE.
+- Exemplo correto: cliente diz "Mava" -> você responde "Obrigada, Mava! Qual o melhor horário..."
+- Nunca diga "meu nome é [nome do cliente]" — isso é um erro grave.
+- Nunca mencione "sistema anterior", "não reconhecido" ou qualquer referência técnica ao cliente.
 
-IMPORTANTE - ANALISE DE DOCUMENTOS:
-- Quando receber uma mensagem com "[ANALISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples
-- Foque na conclusao: a pessoa tem chances ou nao tem?
-- Apos informar, continue o fluxo: peca o nome e horario
+IMPORTANTE — ANÁLISE DE DOCUMENTOS:
+- Quando receber uma mensagem com "[ANALISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples.
+- Foque na conclusão: a pessoa tem chances ou não tem?
+- Depois de informar, continue o fluxo: confirme o nome e pergunte o horário.
 
-IMPORTANTE - FERRAMENTAS:
-- Use notificar_especialista quando tiver: nome do cliente, situacao clara e horario preferido (EXCETO casos trabalhistas)
-- Use reenviar_lembrete quando cliente disser que nao foi contatado
-- Apos usar qualquer ferramenta, confirme ao cliente de forma natural
+IMPORTANTE — FERRAMENTAS:
+- Use notificar_especialista quando tiver: nome do cliente, situação clara e horário preferido (EXCETO casos trabalhistas).
+- Use reenviar_lembrete quando o cliente disser que não foi contatado.
+- Depois de usar qualquer ferramenta, confirme ao cliente de forma natural.
 
-IMPORTANTE - CASOS TRABALHISTAS (REGRA ESPECIAL):
+IMPORTANTE — CASOS TRABALHISTAS (REGRA ESPECIAL):
 - Para caso trabalhista, NUNCA use notificar_especialista. Use SEMPRE triar_caso_trabalhista.
-- Antes de triar, alem do que aconteceu, colete de forma natural (sem interrogatorio): o ultimo salario do cliente, ha quanto tempo trabalhou na empresa (ou quando saiu), nome e melhor horario.
-- Quando tiver esses dados, chame triar_caso_trabalhista. O escritorio faz uma analise antes de assumir o caso.
-- Depois de triar: diga ao cliente, de forma acolhedora, que vai confirmar a disponibilidade com o especialista e retorna em seguida. NAO prometa que o especialista vai ligar ainda - isso depende da confirmacao.
-- A resposta final (se o escritorio assume ou nao) sera enviada automaticamente ao cliente. Voce nao precisa fazer mais nada apos triar.
+- Antes de triar, além do que aconteceu, colete de forma natural (sem interrogatório): o último salário do cliente, há quanto tempo trabalhou na empresa (ou quando saiu), nome e melhor horário.
+- Quando tiver esses dados, chame triar_caso_trabalhista. O escritório faz uma análise antes de assumir o caso.
+- Depois de triar: diga ao cliente, de forma acolhedora, que vai confirmar a disponibilidade com o especialista e retorna em seguida. NÃO prometa que o especialista vai ligar ainda — isso depende da confirmação.
+- A resposta final (se o escritório assume ou não) será enviada automaticamente ao cliente. Você não precisa fazer mais nada depois de triar.
 
-AREAS:
-- Trabalhista: demissao, horas extras, assedio, acidente, rescisao -> Dr. Rafael Jorge Pinhatti
-- Familia: divorcio, pensao, guarda, inventario, heranca -> Dra. Aline Xavier
-- Imobiliario: compra/venda, locacao, usucapiao, despejo -> Dr. Willian Assis
-- Empresarial: empresa, contratos, socios, recuperacao -> Dr. Willian Assis
-- Tributario: dividas fiscais, impostos, Receita -> Dr. Willian Assis
-- Criminal: crimes, BO, defesa criminal -> Dra. Aline Xavier
-- Previdenciario: aposentadoria, beneficios INSS, pensao por morte, auxilio-doenca, invalidez -> Dra. Aline Xavier
-- Civel/Bancario/Consumidor: dividas, cobracas, financiamentos, apreensao de veiculo -> Dr. Willian Assis
+ÁREAS:
+- Trabalhista: demissão, horas extras, assédio, acidente, rescisão -> Dr. Rafael Jorge Pinhatti
+- Família: divórcio, pensão, guarda, inventário, herança -> Dra. Aline Xavier
+- Imobiliário: compra/venda, locação, usucapião, despejo -> Dr. Willian Assis
+- Empresarial: empresa, contratos, sócios, recuperação -> Dr. Willian Assis
+- Tributário: dívidas fiscais, impostos, Receita -> Dr. Willian Assis
+- Criminal: crimes, boletim de ocorrência, defesa criminal -> Dra. Aline Xavier
+- Previdenciário: aposentadoria, benefícios do INSS, pensão por morte, auxílio-doença, invalidez -> Dra. Aline Xavier
+- Cível/Bancário/Consumidor: dívidas, cobranças, financiamentos, apreensão de veículo -> Dr. Willian Assis
 
-HONORARIOS ADVOCATICIOS - COMO RESPONDER SE O CLIENTE PERGUNTAR:
-- Se for caso de Direito do Consumidor (dano moral, dano material, cobranças abusivas, contratos de consumo): informe que o contrato e de 30% do valor que o cliente vier a receber, seja de dano moral ou dano material. Nao cobra nada adiantado.
-- Se for qualquer outro caso (usucapiao, reintegracao de posse, criminal, trabalhista, tributario, familia, previdenciario, etc.): diga que os honorarios dependem da analise do caso e que o especialista vai passar o valor apos a consulta. Nao invente valores.
-- Nunca de valores alem do que esta descrito acima.
+HONORÁRIOS ADVOCATÍCIOS — COMO RESPONDER SE O CLIENTE PERGUNTAR:
+- Se for caso de Direito do Consumidor (dano moral, dano material, cobranças abusivas, contratos de consumo): informe que o contrato é de 30% do valor que o cliente vier a receber, seja de dano moral ou dano material. Não se cobra nada adiantado.
+- Se for qualquer outro caso (usucapião, reintegração de posse, criminal, trabalhista, tributário, família, previdenciário etc.): diga que os honorários dependem da análise do caso e que o especialista vai passar o valor após a consulta. Não invente valores.
+- Nunca dê valores além do que está descrito acima.
 `;
 
-const DOCUMENT_ANALYSIS_PROMPT = `Voce e um assistente juridico especializado do escritorio Assis e Xavier Advogados.
-Analise o documento recebido com base no seu conhecimento juridico amplo - legislacao brasileira, jurisprudencia, doutrina.
+const DOCUMENT_ANALYSIS_PROMPT = `Você é um assistente jurídico especializado do escritório Assis e Xavier Advogados.
+Analise o documento recebido com base no seu conhecimento jurídico amplo — legislação brasileira, jurisprudência, doutrina.
 
-O documento pode ser qualquer tipo: contrato de trabalho, contrato bancario, financiamento, escritura, matricula de imovel, rescisao trabalhista, contrato de locacao, contrato empresarial, procuracao, inventario, ou qualquer outro.
+O documento pode ser de qualquer tipo: contrato de trabalho, contrato bancário, financiamento, escritura, matrícula de imóvel, rescisão trabalhista, contrato de locação, contrato empresarial, procuração, inventário ou qualquer outro.
 
-SUA ANALISE DEVE:
-1. Identificar o tipo de documento
-2. Com base no contexto da conversa, verificar elementos juridicos relevantes para o caso
-3. Identificar clausulas, condicoes ou ausencias que possam favorecer ou prejudicar o cliente
-4. Avaliar as chances de exito numa eventual acao
+SUA ANÁLISE DEVE:
+1. Identificar o tipo de documento.
+2. Com base no contexto da conversa, verificar os elementos jurídicos relevantes para o caso.
+3. Identificar cláusulas, condições ou ausências que possam favorecer ou prejudicar o cliente.
+4. Avaliar as chances de êxito numa eventual ação.
 
 SUA RESPOSTA DEVE CONTER APENAS:
-- Tipo do documento identificado
-- Principais pontos relevantes (maximo 3, objetivamente)
-- Avaliacao das chances de exito: ALTA, MODERADA ou BAIXA - com uma frase de motivo
+- Tipo do documento identificado.
+- Principais pontos relevantes (no máximo 3, objetivamente).
+- Avaliação das chances de êxito: ALTA, MODERADA ou BAIXA — com uma frase de motivo.
 
-NAO use juridiques excessivo. Responda em portugues, claro e direto.`;
+NÃO use juridiquês excessivo. Responda em português correto, com acentuação e pontuação, de forma clara e direta.`;
 
 const TOOLS = [
   {
     name: 'notificar_especialista',
-    description: 'Notifica o especialista da area sobre um novo lead qualificado. Use quando tiver: nome do cliente, situacao juridica clara e horario preferido.',
+    description: 'Notifica o especialista da área sobre um novo lead qualificado. Use quando tiver: nome do cliente, situação jurídica clara e horário preferido.',
     input_schema: {
       type: 'object',
       properties: {
         area: {
           type: 'string',
           enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor', 'previdenciario'],
-          description: 'Area juridica do caso'
+          description: 'Área jurídica do caso'
         },
         nome_cliente: { type: 'string', description: 'Nome do cliente' },
-        horario_preferido: { type: 'string', description: 'Melhor horario para contato' },
+        horario_preferido: { type: 'string', description: 'Melhor horário para contato' },
         resumo_caso: {
           type: 'string',
-          description: 'Resumo completo: situacao, fatos, documentos analisados com resultado, pontos juridicos relevantes'
+          description: 'Resumo completo: situação, fatos, documentos analisados com resultado, pontos jurídicos relevantes'
         }
       },
       required: ['area', 'nome_cliente', 'horario_preferido', 'resumo_caso']
@@ -530,14 +536,14 @@ const TOOLS = [
   },
   {
     name: 'reenviar_lembrete',
-    description: 'Reenviar lembrete urgente ao especialista quando o cliente informar que ainda nao foi contatado.',
+    description: 'Reenviar lembrete urgente ao especialista quando o cliente informar que ainda não foi contatado.',
     input_schema: {
       type: 'object',
       properties: {
         area: {
           type: 'string',
           enum: ['trabalhista', 'familia', 'imobiliario', 'empresarial', 'tributario', 'criminal', 'civel_bancario', 'consumidor', 'previdenciario'],
-          description: 'Area juridica do caso'
+          description: 'Área jurídica do caso'
         },
         nome_cliente: { type: 'string', description: 'Nome do cliente que aguarda retorno' }
       },
@@ -546,14 +552,14 @@ const TOOLS = [
   },
   {
     name: 'triar_caso_trabalhista',
-    description: 'USE APENAS para casos TRABALHISTAS. Em vez de notificar o especialista diretamente, envia o caso para uma triagem previa com o Dr. Rafael, que decide se o escritorio vai assumir. So use quando ja tiver: nome do cliente, horario preferido, ultimo salario, tempo de trabalho e um resumo do que aconteceu. NUNCA use notificar_especialista para casos trabalhistas.',
+    description: 'USE APENAS para casos TRABALHISTAS. Em vez de notificar o especialista diretamente, envia o caso para uma triagem prévia com o Dr. Rafael, que decide se o escritório vai assumir. Só use quando já tiver: nome do cliente, horário preferido, último salário, tempo de trabalho e um resumo do que aconteceu. NUNCA use notificar_especialista para casos trabalhistas.',
     input_schema: {
       type: 'object',
       properties: {
         nome_cliente: { type: 'string', description: 'Nome do cliente' },
-        horario_preferido: { type: 'string', description: 'Melhor horario para contato, caso o caso seja aceito' },
-        salario: { type: 'string', description: 'Ultimo salario do cliente (ex: R$ 1.800)' },
-        tempo_trabalho: { type: 'string', description: 'Quanto tempo trabalhou na empresa e/ou ha quanto tempo saiu (ex: 12 anos de casa, saiu ha 3 meses)' },
+        horario_preferido: { type: 'string', description: 'Melhor horário para contato, caso o caso seja aceito' },
+        salario: { type: 'string', description: 'Último salário do cliente (ex: R$ 1.800)' },
+        tempo_trabalho: { type: 'string', description: 'Quanto tempo trabalhou na empresa e/ou há quanto tempo saiu (ex: 12 anos de casa, saiu há 3 meses)' },
         resumo_caso: {
           type: 'string',
           description: 'Resumo do caso: o que aconteceu, o que a empresa deixou de pagar, pontos relevantes'
@@ -590,9 +596,9 @@ function buildSystemPrompt(userId) {
     .join('\n');
 
   return OFFICE_CONTEXT +
-    `\n\nATENCAO CRITICA - CONVERSA EM ANDAMENTO:\n` +
-    `Voce JA esta atendendo este cliente. NAO se apresente. Retome exatamente de onde parou.\n\n` +
-    `ULTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
+    `\n\nATENÇÃO CRÍTICA — CONVERSA EM ANDAMENTO:\n` +
+    `Você JÁ está atendendo este cliente. NÃO se apresente. Retome exatamente de onde parou. Continue escrevendo em português correto, com acentuação e pontuação.\n\n` +
+    `ÚLTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
 }
 
 async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null, attachments = []) {
@@ -673,7 +679,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `🔔 *NOVO ATENDIMENTO - ${areaLabel}*\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `📱 *WhatsApp:* +${clientPhone}\n` +
-      `⏰ *Melhor horario:* ${horario_preferido}\n\n` +
+      `⏰ *Melhor horário:* ${horario_preferido}\n\n` +
       `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
       `_Atendimento realizado pela Ana - Assis e Xavier Advogados_`;
 
@@ -683,7 +689,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `<table style="border-collapse:collapse;width:100%">` +
       `<tr><td style="padding:8px;font-weight:bold;width:140px">Cliente:</td><td style="padding:8px">${nome_cliente}</td></tr>` +
       `<tr style="background:#f2f2f2"><td style="padding:8px;font-weight:bold">WhatsApp:</td><td style="padding:8px">+${clientPhone}</td></tr>` +
-      `<tr><td style="padding:8px;font-weight:bold">Melhor horario:</td><td style="padding:8px">${horario_preferido}</td></tr>` +
+      `<tr><td style="padding:8px;font-weight:bold">Melhor horário:</td><td style="padding:8px">${horario_preferido}</td></tr>` +
       `</table>` +
       `<h3 style="color:#1a5276;margin-top:20px">Resumo do Caso</h3>` +
       `<p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #1a5276">${resumo_caso}</p>` +
@@ -779,7 +785,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `⏰ *LEMBRETE URGENTE - CLIENTE AGUARDANDO*\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `📱 *WhatsApp:* +${clientPhone}\n\n` +
-      `O cliente informou que ainda nao recebeu seu contato. Por favor, entre em contato o quanto antes.\n\n` +
+      `O cliente informou que ainda não recebeu seu contato. Por favor, entre em contato o quanto antes.\n\n` +
       `_Assis e Xavier Advogados_`;
 
     const emailHtml =
@@ -789,7 +795,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `<tr><td style="padding:8px;font-weight:bold;width:140px">Cliente:</td><td style="padding:8px">${nome_cliente}</td></tr>` +
       `<tr style="background:#f2f2f2"><td style="padding:8px;font-weight:bold">WhatsApp:</td><td style="padding:8px">+${clientPhone}</td></tr>` +
       `</table>` +
-      `<p style="margin-top:16px;color:#c0392b;font-weight:bold">O cliente informou que ainda nao recebeu seu contato. Por favor, entre em contato o quanto antes.</p>` +
+      `<p style="margin-top:16px;color:#c0392b;font-weight:bold">O cliente informou que ainda não recebeu seu contato. Por favor, entre em contato o quanto antes.</p>` +
       `<hr style="margin-top:24px">` +
       `<small style="color:#888">Assis e Xavier Advogados</small>` +
       `</div>`;
@@ -800,7 +806,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       nome_cliente,
       `+${clientPhone}`,
       '-',
-      'Cliente informou que ainda nao recebeu seu contato. Entre em contato o quanto antes.'
+      'Cliente informou que ainda não recebeu seu contato. Entre em contato o quanto antes.'
     ]);
 
     // 2) Fallback: texto livre (dentro da janela de 24h)
@@ -828,7 +834,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
         `⏰ *LEMBRETE - Cliente aguardando ${specialist.name}*\n\n` +
         `👤 *Cliente:* ${nome_cliente}\n` +
         `📱 *WhatsApp:* +${clientPhone}\n\n` +
-        `Cliente informou que ainda nao foi contatado por ${specialist.name}. Por favor, verifique.`;
+        `Cliente informou que ainda não foi contatado por ${specialist.name}. Por favor, verifique.`;
 
       const adminTplOk = await sendWhatsAppTemplate(ADMIN_PHONE, [
         `LEMBRETE (${area.toUpperCase().replace('_', '/')})`,
@@ -898,9 +904,9 @@ async function executeTool(toolName, toolInput, clientPhone) {
 
     console.log(`[Triagem] Caso ${code} (${nome_cliente}) enviado ao Dr. Rafael. Aguardando SIM/NAO.`);
 
-    return `Triagem enviada ao especialista (codigo ${code}). Diga ao cliente, de forma natural e acolhedora, ` +
-      `que voce vai confirmar a disponibilidade com o especialista e retorna em seguida. ` +
-      `NAO afirme ainda que o especialista vai ligar — isso depende da confirmacao. Encerre por aqui.`;
+    return `Triagem enviada ao especialista (código ${code}). Diga ao cliente, de forma natural e acolhedora, ` +
+      `que você vai confirmar a disponibilidade com o especialista e retorna em seguida. ` +
+      `NÃO afirme ainda que o especialista vai ligar — isso depende da confirmação. Encerre por aqui.`;
   }
 
   return 'Ferramenta desconhecida.';
@@ -1004,27 +1010,27 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
   if (triage.code && typeof triage.aceito === 'boolean') {
     const ok = await resolveTriage(triage.code, triage.aceito);
     if (!ok) {
-      await sendWhatsAppMessage(senderNumber, `Nao encontrei o caso ${triage.code} (talvez ja tenha sido respondido). Se precisar, me diga o codigo novamente.`);
+      await sendWhatsAppMessage(senderNumber, `Não encontrei o caso ${triage.code} (talvez já tenha sido respondido). Se precisar, me diga o código novamente.`);
       return;
     }
     await sendWhatsAppMessage(
       senderNumber,
       triage.aceito
-        ? `✅ Perfeito, ${nomeCurto}. Caso ${triage.code} confirmado — ja avisei o cliente e enviei os dados completos para contato.`
-        : `👍 Entendido, ${nomeCurto}. Caso ${triage.code} recusado. Ja comuniquei o cliente de forma educada. Obrigada!`
+        ? `✅ Perfeito, ${nomeCurto}. Caso ${triage.code} confirmado — já avisei o cliente e enviei os dados completos para contato.`
+        : `👍 Entendido, ${nomeCurto}. Caso ${triage.code} recusado. Já comuniquei o cliente de forma educada. Obrigada!`
     );
     return;
   }
 
   if (triage.ambiguous) {
     const alvo = triage.code ? ` do caso ${triage.code}` : '';
-    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, nao entendi a decisao${alvo}. Pode responder *SIM* ou *NAO*${triage.code ? ` ${triage.code}` : ''}?`);
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não entendi a decisão${alvo}. Pode responder *SIM* ou *NAO*${triage.code ? ` ${triage.code}` : ''}?`);
     return;
   }
 
   if (triage.needCode) {
     const lista = triage.pendentes.map(p => `• ${p.code} — ${p.nome}`).join('\n');
-    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, ha mais de um caso em triagem. Responda com o codigo, por exemplo *SIM ${triage.pendentes[0].code}* ou *NAO ${triage.pendentes[0].code}*:\n${lista}`);
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, há mais de um caso em triagem. Responda com o código, por exemplo *SIM ${triage.pendentes[0].code}* ou *NAO ${triage.pendentes[0].code}*:\n${lista}`);
     return;
   }
 
@@ -1033,9 +1039,9 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
     const pend = await listPendingTriages(senderNumber);
     if (pend.length) {
       const lista = pend.map(p => `• ${p.code} — ${p.nome}`).join('\n');
-      await sendWhatsAppMessage(senderNumber, `${nomeCurto}, casos aguardando sua decisao:\n${lista}\n\nResponda *SIM <codigo>* ou *NAO <codigo>*.`);
+      await sendWhatsAppMessage(senderNumber, `${nomeCurto}, casos aguardando sua decisão:\n${lista}\n\nResponda *SIM <código>* ou *NAO <código>*.`);
     } else {
-      await sendWhatsAppMessage(senderNumber, `${nomeCurto}, nao ha nenhum caso em triagem aguardando sua decisao no momento.`);
+      await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não há nenhum caso em triagem aguardando sua decisão no momento.`);
     }
     return;
   }
@@ -1043,7 +1049,7 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
   // Qualquer outra mensagem do advogado: resposta profissional, sem intake de lead
   await sendWhatsAppMessage(
     senderNumber,
-    `Ola, ${nomeCurto}. Aqui e o atendimento automatico da Ana. No momento nao ha nenhum caso em triagem aguardando sua resposta — assim que houver, envio por aqui. Se quiser ver os pendentes, e so escrever "casos".`
+    `Olá, ${nomeCurto}. Aqui é o atendimento automático da Ana. No momento não há nenhum caso em triagem aguardando sua resposta — assim que houver, envio por aqui. Se quiser ver os pendentes, é só escrever "casos".`
   );
 }
 
@@ -1112,7 +1118,7 @@ async function callClaudeAPIInternal(userMessage, userId) {
 
   } catch (error) {
     console.error('[Claude] Erro:', error.response?.data || error.message);
-    return `Desculpe, tive um problema tecnico. Entre em contato via WhatsApp: ${ESCRITORIO_PHONE}`;
+    return `Desculpe, tive um problema técnico momentâneo. Pode me escrever de novo em instantes? Se preferir, o telefone do escritório é ${ESCRITORIO_PHONE}.`;
   }
 }
 
@@ -1145,10 +1151,10 @@ async function analyzeDocumentWithClaude(buffer, mimeType, conversationContext) 
     } else if (mimeType === 'application/pdf') {
       const pdfData = await pdfParse(buffer);
       const text = pdfData.text.substring(0, 10000);
-      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEUDO DO DOCUMENTO:\n${text}`;
+      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEÚDO DO DOCUMENTO:\n${text}`;
     } else {
       const text = buffer.toString('utf8').substring(0, 10000);
-      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEUDO DO DOCUMENTO:\n${text}`;
+      userContent = `Analise este documento.\n\nCONTEXTO DA CONVERSA:\n${conversationContext}\n\nCONTEÚDO DO DOCUMENTO:\n${text}`;
     }
 
     const response = await axios.post(
@@ -1213,13 +1219,13 @@ async function handleDocument(message, userId) {
     const analysisResult = await analyzeDocumentWithClaude(buffer, mimeType, recentHistory);
 
     if (!analysisResult) {
-      return callClaudeAPI('O cliente enviou um documento mas nao consegui processa-lo. Peca para enviar em PDF ou como foto nitida.', userId);
+      return callClaudeAPI('O cliente enviou um documento, mas não consegui processá-lo. Peça para enviar em PDF ou como foto nítida.', userId);
     }
 
     return callClaudeAPI(`[ANALISE DO DOCUMENTO - ${filename}]\n${analysisResult}`, userId);
   } catch (error) {
     console.error('[Doc] Erro ao processar documento:', error.response?.data || error.message);
-    return callClaudeAPI('O cliente enviou um documento mas ocorreu um erro tecnico. Peca para tentar novamente.', userId);
+    return callClaudeAPI('O cliente enviou um documento, mas ocorreu um erro técnico. Peça para tentar novamente.', userId);
   }
 }
 
@@ -1377,9 +1383,9 @@ app.post('/webhook', async (req, res) => {
 
     if (message.type === 'audio' || message.type === 'voice') {
       const audioReplies = [
-        'Ouvi seu audio! Me conta um pouco mais por escrito? Assim consigo te direcionar para o especialista certo aqui no escritorio.',
-        'Recebi seu audio! Para garantir que nada se perca, pode me resumir aqui o que esta acontecendo?',
-        'Escutei! Me escreve rapidinho o que precisa, assim ja te passo para o advogado certo.'
+        'Ouvi seu áudio! Pode me contar um pouco mais por escrito? Assim consigo direcionar você ao especialista certo aqui no escritório.',
+        'Recebi seu áudio! Para garantir que nada se perca, pode me resumir aqui o que está acontecendo?',
+        'Escutei! Pode me escrever rapidinho o que precisa? Assim já encaminho você ao advogado certo.'
       ];
       const reply = audioReplies[Math.floor(Math.random() * audioReplies.length)];
       await typingDelay(reply);
