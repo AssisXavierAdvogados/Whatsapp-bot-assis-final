@@ -2248,6 +2248,246 @@ a{color:#00a884}</style></head><body><h2>Assinatura do webhook</h2>
 });
 // =================== FIM DO DIAGNOSTICO ===================
 
+// ===================== TRIAGEM POR PERIODO =====================
+// Relatorio de quem procurou a Ana entre duas datas, montado a partir do
+// Supabase (+ memoria), cruzado com as estatisticas de conversas da Meta para
+// revelar dias em que clientes escreveram mas nada chegou ao servidor.
+// Use: /admin/triagem?token=SENHA&de=2026-08-17&ate=2026-09-04[&waba=ID]
+//      /admin/triagem.json (mesmos parametros)
+
+const TZ_SP = 'America/Sao_Paulo';
+
+function dataSP(d) {
+  // Data local (YYYY-MM-DD) em Sao Paulo de um Date/ISO
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt)) return null;
+  return dt.toLocaleDateString('sv-SE', { timeZone: TZ_SP }); // sv-SE => 2026-09-04
+}
+function horaSP(d) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt)) return '';
+  return dt.toLocaleString('pt-BR', { timeZone: TZ_SP, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+function validaData(s, padrao) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? s : padrao;
+}
+
+async function estatisticasMeta(wabaId, de, ate) {
+  // Conversas por dia segundo a Meta (quem iniciou: cliente ou escritorio).
+  if (!WHATSAPP_TOKEN || !wabaId) return { erro: 'sem WABA_ID' };
+  const ini = Math.floor(new Date(`${de}T00:00:00-03:00`).getTime() / 1000);
+  const fim = Math.floor(new Date(`${ate}T23:59:59-03:00`).getTime() / 1000);
+  try {
+    const r = await axios.get(`https://graph.facebook.com/v19.0/${wabaId}`, {
+      timeout: DIAG_TIMEOUT,
+      params: {
+        fields: `conversation_analytics.start(${ini}).end(${fim}).granularity(DAILY).dimensions(CONVERSATION_DIRECTION)`,
+        access_token: WHATSAPP_TOKEN
+      }
+    });
+    const pontos = r.data?.conversation_analytics?.data?.[0]?.data_points || [];
+    const porDia = {};
+    for (const p of pontos) {
+      const dia = dataSP(p.start * 1000);
+      porDia[dia] = porDia[dia] || { cliente: 0, escritorio: 0 };
+      if (p.conversation_direction === 'USER_INITIATED') porDia[dia].cliente += p.conversation || 0;
+      else porDia[dia].escritorio += p.conversation || 0;
+    }
+    return { porDia };
+  } catch (e) {
+    return { erro: e.response?.data?.error?.message || e.message };
+  }
+}
+
+async function montarTriagem(opts) {
+  const hoje = dataSP(new Date());
+  const de = validaData(opts.de, '2026-08-17');
+  const ate = validaData(opts.ate, hoje);
+  const inicio = new Date(`${de}T00:00:00-03:00`).getTime();
+  const fim = new Date(`${ate}T23:59:59.999-03:00`).getTime();
+
+  // Junta Supabase + memoria, priorizando o que estiver mais completo
+  const fontes = {};
+  const rows = (await supabaseGetAll()) || [];
+  for (const row of rows) fontes[row.phone] = { messages: row.messages || [], meta: row.meta || null, handled: !!row.handled, updated_at: row.updated_at || null };
+  for (const [phone, msgs] of Object.entries(conversationHistory)) {
+    const f = fontes[phone] || { messages: [], meta: null, handled: false, updated_at: null };
+    if ((msgs || []).length >= f.messages.length) f.messages = msgs;
+    f.meta = conversationMeta[phone] || f.meta;
+    fontes[phone] = f;
+  }
+
+  const textoDe = (m) => {
+    if (typeof m.content === 'string') return m.content.trim();
+    if (Array.isArray(m.content)) return m.content.filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
+    return '';
+  };
+
+  const clientes = [];
+  for (const [phone, f] of Object.entries(fontes)) {
+    if (phone.startsWith('TRIAGE#')) continue;          // linhas internas de triagem trabalhista
+    if (findSpecialistByPhone(phone)) continue;         // advogados do escritorio nao sao clientes
+
+    const todas = (f.messages || []).map(m => ({ role: m.role, text: textoDe(m), ts: m.ts ? new Date(m.ts).getTime() : null }))
+      .filter(m => m.text);
+    const comData = todas.filter(m => m.ts);
+    let noPeriodo;
+    if (comData.length) {
+      noPeriodo = todas.filter(m => m.ts && m.ts >= inicio && m.ts <= fim);
+    } else {
+      // Historico antigo sem data por mensagem: usa a data de atualizacao da linha
+      const up = f.updated_at ? new Date(f.updated_at).getTime() : null;
+      noPeriodo = (up && up >= inicio && up <= fim) ? todas : [];
+    }
+    if (!noPeriodo.length) continue;
+
+    const doCliente = noPeriodo.filter(m => m.role === 'user');
+    const daAna = noPeriodo.filter(m => m.role === 'assistant');
+    if (!doCliente.length) continue;
+
+    const ultima = noPeriodo[noPeriodo.length - 1];
+    const primeiroContato = doCliente[0].ts || (f.updated_at ? new Date(f.updated_at).getTime() : null);
+    const ultimoContato = doCliente[doCliente.length - 1].ts || primeiroContato;
+    const meta = f.meta || {};
+    clientes.push({
+      telefone: phone,
+      nome: meta.nome || null,
+      area: meta.area || null,
+      especialista: meta.especialista || null,
+      horario: meta.horario || null,
+      encaminhado: !!meta.especialista,
+      tratado: !!f.handled,
+      primeiro_contato: primeiroContato,
+      ultimo_contato: ultimoContato,
+      msgs_cliente: doCliente.length,
+      msgs_ana: daAna.length,
+      sem_resposta: ultima.role === 'user',
+      primeira_msg: doCliente[0].text.slice(0, 220),
+      ultima_msg: doCliente[doCliente.length - 1].text.slice(0, 220)
+    });
+  }
+  clientes.sort((a, b) => (b.ultimo_contato || 0) - (a.ultimo_contato || 0));
+
+  // Conversas registradas no servidor, por dia (para cruzar com a Meta)
+  const servidorPorDia = {};
+  for (const c of clientes) {
+    const dia = dataSP(c.primeiro_contato);
+    if (dia) servidorPorDia[dia] = (servidorPorDia[dia] || 0) + 1;
+  }
+
+  let wabaId = opts.waba || process.env.WABA_ID || null;
+  if (!wabaId) { try { const w = await descobrirWabas(); if (w.length === 1) wabaId = w[0]; } catch (e) { /* segue sem Meta */ } }
+  const meta = await estatisticasMeta(wabaId, de, ate);
+
+  const dias = [];
+  for (let t = inicio; t <= fim; t += 86400000) {
+    const dia = dataSP(t);
+    const m = meta.porDia?.[dia];
+    dias.push({ dia, meta_cliente: m ? m.cliente : null, meta_escritorio: m ? m.escritorio : null, servidor: servidorPorDia[dia] || 0 });
+  }
+  const perdidas = meta.porDia
+    ? dias.reduce((s, d) => s + Math.max(0, (d.meta_cliente || 0) - d.servidor), 0)
+    : null;
+
+  return {
+    periodo: { de, ate },
+    gerado_em: new Date().toLocaleString('pt-BR', { timeZone: TZ_SP }),
+    resumo: {
+      clientes: clientes.length,
+      encaminhados_ao_especialista: clientes.filter(c => c.encaminhado).length,
+      sem_resposta_da_ana: clientes.filter(c => c.sem_resposta).length,
+      ainda_nao_tratados: clientes.filter(c => !c.tratado).length,
+      conversas_de_clientes_segundo_meta: meta.porDia ? dias.reduce((s, d) => s + (d.meta_cliente || 0), 0) : null,
+      possivelmente_perdidas: perdidas
+    },
+    meta_erro: meta.erro || null,
+    waba: wabaId,
+    dias,
+    clientes
+  };
+}
+
+app.get('/admin/triagem.json', async (req, res) => {
+  if (!diagAutorizado(req)) return res.status(401).send(DIAG_SEM_SENHA);
+  res.json(await montarTriagem(req.query));
+});
+
+app.get('/admin/triagem', async (req, res) => {
+  if (!diagAutorizado(req)) return res.status(401).send(DIAG_SEM_SENHA);
+  const r = await montarTriagem(req.query);
+  const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const fmtDia = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}`; };
+
+  const cards = r.clientes.map(c => `
+    <div class="card ${c.sem_resposta ? 'alerta' : (c.encaminhado ? 'ok' : '')}">
+      <div class="top"><b>${esc(c.nome || 'Nome nao informado')}</b> <span class="tel">+${esc(c.telefone)}</span></div>
+      <div class="linha">${esc(horaSP(c.primeiro_contato))}${c.msgs_cliente > 1 ? ` &rarr; ${esc(horaSP(c.ultimo_contato))}` : ''} &middot; ${c.msgs_cliente} msg do cliente, ${c.msgs_ana} da Ana</div>
+      ${c.area ? `<div class="linha">Area: <b>${esc(c.area)}</b> &middot; ${esc(c.especialista)}${c.horario ? ` &middot; prefere ${esc(c.horario)}` : ''}</div>` : ''}
+      <div class="tags">
+        ${c.encaminhado ? '<span class="tag verde">encaminhado ao especialista</span>' : '<span class="tag cinza">nao encaminhado</span>'}
+        ${c.sem_resposta ? '<span class="tag vermelha">ULTIMA MENSAGEM SEM RESPOSTA</span>' : ''}
+        ${c.tratado ? '<span class="tag azul">tratado no painel</span>' : ''}
+      </div>
+      <div class="msg">&ldquo;${esc(c.ultima_msg)}&rdquo;</div>
+      <a class="zap" href="https://wa.me/${esc(c.telefone)}">Abrir conversa no WhatsApp</a>
+    </div>`).join('');
+
+  const tabelaDias = r.dias.map(d => {
+    const perdeu = d.meta_cliente != null && d.meta_cliente > d.servidor;
+    return `<tr class="${perdeu ? 'perdeu' : ''}"><td>${fmtDia(d.dia)}</td><td>${d.meta_cliente == null ? '&ndash;' : d.meta_cliente}</td><td>${d.servidor}</td><td>${perdeu ? '&#9888; ' + (d.meta_cliente - d.servidor) + ' nao chegou' : ''}</td></tr>`;
+  }).join('');
+
+  res.send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Triagem ${esc(r.periodo.de)} a ${esc(r.periodo.ate)}</title>
+<style>
+body{font-family:-apple-system,Segoe UI,Arial,sans-serif;margin:0;padding:16px;background:#0b141a;color:#e9edef}
+h1{font-size:20px;margin:0 0 2px}.sub{color:#8696a0;font-size:13px;margin-bottom:14px}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+.kpi{background:#202c33;border-radius:10px;padding:10px}.kpi b{font-size:22px;display:block}.kpi span{font-size:12px;color:#8696a0}
+.kpi.ruim b{color:#f87171}.kpi.bom b{color:#4ade80}
+h2{font-size:16px;margin:18px 0 8px}
+.card{background:#202c33;border-radius:10px;padding:12px;margin-bottom:10px;border-left:4px solid #8696a0}
+.card.ok{border-left-color:#00a884}.card.alerta{border-left-color:#ef4444}
+.top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}.tel{color:#8696a0;font-size:13px}
+.linha{font-size:13px;color:#d1d7db;margin-top:4px}
+.tags{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#37474f;color:#e9edef}
+.tag.verde{background:#0d3b2e;color:#4ade80}.tag.vermelha{background:#3b0d0d;color:#f87171}.tag.azul{background:#0d2a3b;color:#7dd3fc}.tag.cinza{background:#2a3942;color:#8696a0}
+.msg{margin-top:8px;font-size:14px;color:#e9edef;background:#111b21;padding:8px;border-radius:8px}
+.zap{display:inline-block;margin-top:8px;color:#00a884;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px;background:#202c33;border-radius:10px;overflow:hidden}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #2a3942}th{color:#8696a0;font-weight:600;font-size:12px}
+tr.perdeu td{color:#fbbf24}
+.aviso{background:#3b2a0d;color:#fbbf24;padding:10px;border-radius:8px;font-size:13px;margin-bottom:12px}
+.form{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}.form input{background:#202c33;color:#e9edef;border:1px solid #37474f;border-radius:8px;padding:8px}
+.form button{background:#00a884;color:#fff;border:0;border-radius:8px;padding:8px 12px}
+</style></head><body>
+<h1>Quem procurou a Ana</h1>
+<div class="sub">${esc(fmtDia(r.periodo.de))} a ${esc(fmtDia(r.periodo.ate))} &middot; gerado ${esc(r.gerado_em)}</div>
+<form class="form" method="get">
+  <input type="hidden" name="token" value="${esc(req.query.token || '')}">
+  ${r.waba ? `<input type="hidden" name="waba" value="${esc(r.waba)}">` : ''}
+  <input type="date" name="de" value="${esc(r.periodo.de)}"><input type="date" name="ate" value="${esc(r.periodo.ate)}"><button>Filtrar</button>
+</form>
+<div class="kpis">
+  <div class="kpi"><b>${r.resumo.clientes}</b><span>clientes que chegaram ao servidor</span></div>
+  <div class="kpi bom"><b>${r.resumo.encaminhados_ao_especialista}</b><span>encaminhados ao especialista</span></div>
+  <div class="kpi ruim"><b>${r.resumo.sem_resposta_da_ana}</b><span>ficaram sem resposta da Ana</span></div>
+  <div class="kpi ${r.resumo.possivelmente_perdidas ? 'ruim' : ''}"><b>${r.resumo.possivelmente_perdidas == null ? '&ndash;' : r.resumo.possivelmente_perdidas}</b><span>conversas que a Meta contou mas nao chegaram</span></div>
+</div>
+${r.meta_erro ? `<div class="aviso">Nao consegui as estatisticas da Meta (${esc(r.meta_erro)}). A coluna "Meta" fica vazia; adicione &amp;waba=ID_DA_CONTA no link.</div>` : ''}
+${r.resumo.possivelmente_perdidas ? `<div class="aviso">&#9888; Nos dias marcados, clientes iniciaram conversa segundo a Meta, mas nada chegou ao servidor (webhook desassinado). Esses contatos nao tem registro de numero nem de mensagem &mdash; a Meta nao guarda o conteudo. Veja "Conversas do WhatsApp" no Gerenciador de Negocios da Meta para o total do periodo.</div>` : ''}
+<h2>Clientes (${r.clientes.length})</h2>
+${cards || '<div class="card">Nenhum cliente registrado no servidor neste periodo.</div>'}
+<h2>Dia a dia</h2>
+<table><tr><th>Dia</th><th>Meta: iniciadas por cliente</th><th>Servidor: registradas</th><th></th></tr>${tabelaDias}</table>
+<div class="sub" style="margin-top:12px">Dados: <a style="color:#00a884" href="/admin/triagem.json?token=${encodeURIComponent(req.query.token || '')}&de=${esc(r.periodo.de)}&ate=${esc(r.periodo.ate)}${r.waba ? '&waba=' + esc(r.waba) : ''}">/admin/triagem.json</a></div>
+</body></html>`);
+});
+// =================== FIM DA TRIAGEM ===================
+
+
+
 app.listen(PORT, () => {
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
