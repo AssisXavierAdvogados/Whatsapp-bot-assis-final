@@ -33,3 +33,5 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: TRANSCRIBE_API_KEY
+        sync: false

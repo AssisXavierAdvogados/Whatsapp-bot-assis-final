@@ -293,6 +293,10 @@ const LEAD_TEMPLATE_NAME = process.env.LEAD_TEMPLATE_NAME; // ex: novo_lead (apr
 const TEMPLATE_LANG = process.env.TEMPLATE_LANG || 'pt_BR';
 const SUPABASE_URL = process.env.SUPABASE_URL;   // ex: https://xxxx.supabase.co
 const SUPABASE_KEY = process.env.SUPABASE_KEY;   // secret key do Supabase
+// Transcricao de audio (API compativel com OpenAI: Groq por padrao, OpenAI tambem serve)
+const TRANSCRIBE_API_KEY = process.env.TRANSCRIBE_API_KEY || process.env.GROQ_API_KEY;
+const TRANSCRIBE_BASE_URL = (process.env.TRANSCRIBE_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, '');
+const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || 'whisper-large-v3-turbo';
 
 const SPECIALISTS = {
   trabalhista:    { name: 'Dr. Rafael Jorge Pinhatti', phone: '5544991128087', email: 'rafaelpinhatti_adv@hotmail.com' },
@@ -460,6 +464,10 @@ IMPORTANTE — NOME DO CLIENTE:
 - Exemplo correto: cliente diz "Mava" -> você responde "Obrigada, Mava! Qual o melhor horário..."
 - Nunca diga "meu nome é [nome do cliente]" — isso é um erro grave.
 - Nunca mencione "sistema anterior", "não reconhecido" ou qualquer referência técnica ao cliente.
+
+IMPORTANTE — ÁUDIOS:
+- Mensagens marcadas com "[ÁUDIO TRANSCRITO]" são áudios do cliente convertidos em texto automaticamente. Trate como se ele tivesse escrito; nunca mencione "transcrição" nem o marcador.
+- Se a transcrição vier confusa ou incompleta, confirme com o cliente, de forma natural, o ponto que ficou em dúvida.
 
 IMPORTANTE — ANÁLISE DE DOCUMENTOS:
 - Quando receber uma mensagem com "[ANALISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples.
@@ -1181,6 +1189,38 @@ async function analyzeDocumentWithClaude(buffer, mimeType, conversationContext) 
   }
 }
 
+// Transcreve um audio do WhatsApp (ogg/opus) com Whisper via API compativel com
+// OpenAI (Groq por padrao). Retorna o texto ou null se nao der.
+async function transcribeAudio(buffer, mimeType) {
+  if (!TRANSCRIBE_API_KEY) return null;
+  try {
+    const ext = (mimeType || '').includes('mpeg') ? 'mp3' : (mimeType || '').includes('mp4') ? 'm4a' : 'ogg';
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: (mimeType || 'audio/ogg').split(';')[0] }), `audio.${ext}`);
+    form.append('model', TRANSCRIBE_MODEL);
+    form.append('language', 'pt');
+    form.append('response_format', 'json');
+    form.append('temperature', '0');
+    const r = await fetch(`${TRANSCRIBE_BASE_URL}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TRANSCRIBE_API_KEY}` },
+      body: form,
+      signal: AbortSignal.timeout(60000)
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.error(`[Audio] Transcricao falhou (HTTP ${r.status}): ${body.slice(0, 300)}`);
+      return null;
+    }
+    const data = await r.json();
+    const text = (data.text || '').trim();
+    return text || null;
+  } catch (e) {
+    console.error('[Audio] Erro na transcricao:', e.message);
+    return null;
+  }
+}
+
 async function handleDocument(message, userId) {
   try {
     let mediaId, mimeType, filename;
@@ -1382,10 +1422,28 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (message.type === 'audio' || message.type === 'voice') {
+      const media = message.audio || message.voice || {};
+      let transcript = null;
+      if (TRANSCRIBE_API_KEY && media.id) {
+        try {
+          const { url, mimeType } = await getMediaUrl(media.id);
+          const buffer = await downloadMedia(url);
+          transcript = await transcribeAudio(buffer, mimeType || media.mime_type);
+        } catch (e) {
+          console.error('[Audio] Erro ao baixar audio:', e.response?.data?.error?.message || e.message);
+        }
+      }
+
+      if (transcript) {
+        console.log(`[Webhook] Audio de ${senderNumber} transcrito: ${transcript}`);
+        queueClientText(senderNumber, `[ÁUDIO TRANSCRITO] ${transcript}`);
+        return;
+      }
+
       const audioReplies = [
-        'Ouvi seu áudio! Pode me contar um pouco mais por escrito? Assim consigo direcionar você ao especialista certo aqui no escritório.',
-        'Recebi seu áudio! Para garantir que nada se perca, pode me resumir aqui o que está acontecendo?',
-        'Escutei! Pode me escrever rapidinho o que precisa? Assim já encaminho você ao advogado certo.'
+        'Ouvi seu áudio, mas não consegui entender bem. Pode me contar por escrito? Assim consigo direcionar você ao especialista certo aqui no escritório.',
+        'Recebi seu áudio, mas ficou difícil de entender. Para garantir que nada se perca, pode me resumir aqui o que está acontecendo?',
+        'Escutei, mas não ficou claro. Pode me escrever rapidinho o que precisa? Assim já encaminho você ao advogado certo.'
       ];
       const reply = audioReplies[Math.floor(Math.random() * audioReplies.length)];
       await typingDelay(reply);
@@ -1416,35 +1474,40 @@ app.post('/webhook', async (req, res) => {
 
     const incomingText = message.text.body;
     console.log(`[Webhook] Texto de ${senderNumber}: ${incomingText}`);
-
-    if (pendingMessages[senderNumber]) {
-      clearTimeout(pendingMessages[senderNumber].timer);
-      pendingMessages[senderNumber].messages.push(incomingText);
-    } else {
-      pendingMessages[senderNumber] = { messages: [incomingText] };
-    }
-
-    pendingMessages[senderNumber].timer = setTimeout(async () => {
-      const batch = pendingMessages[senderNumber];
-      if (!batch) return;
-      delete pendingMessages[senderNumber];
-
-      const combined = batch.messages.join('\n');
-      console.log(`[Batch] Processando ${batch.messages.length} mensagem(ns) de ${senderNumber}`);
-
-      try {
-        const reply = await callClaudeAPI(combined, senderNumber);
-        await typingDelay(reply);
-        await sendWhatsAppMessage(senderNumber, reply);
-      } catch (error) {
-        console.error('[Batch] Erro ao processar:', error);
-      }
-    }, 8000);
+    queueClientText(senderNumber, incomingText);
 
   } catch (error) {
     console.error('[Webhook] Erro:', error);
   }
 });
+
+// Enfileira um texto do cliente (digitado ou transcrito de audio) no debounce
+// de 8s, para responder tudo junto quando a pessoa manda varias mensagens.
+function queueClientText(senderNumber, text) {
+  if (pendingMessages[senderNumber]) {
+    clearTimeout(pendingMessages[senderNumber].timer);
+    pendingMessages[senderNumber].messages.push(text);
+  } else {
+    pendingMessages[senderNumber] = { messages: [text] };
+  }
+
+  pendingMessages[senderNumber].timer = setTimeout(async () => {
+    const batch = pendingMessages[senderNumber];
+    if (!batch) return;
+    delete pendingMessages[senderNumber];
+
+    const combined = batch.messages.join('\n');
+    console.log(`[Batch] Processando ${batch.messages.length} mensagem(ns) de ${senderNumber}`);
+
+    try {
+      const reply = await callClaudeAPI(combined, senderNumber);
+      await typingDelay(reply);
+      await sendWhatsAppMessage(senderNumber, reply);
+    } catch (error) {
+      console.error('[Batch] Erro ao processar:', error);
+    }
+  }, 8000);
+}
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
@@ -1822,7 +1885,7 @@ app.get('/health', (req, res) => {
     status: 'OK',
     message: 'Chatbot esta funcionando!',
     api: 'Meta WhatsApp Cloud API',
-    features: ['texto com debounce 8s', 'audio', 'PDF', 'imagens', 'analise juridica', 'notificacao de especialistas', 'lembrete automatico', 'email de especialistas'],
+    features: ['texto com debounce 8s', 'audio (transcricao Whisper)', 'PDF', 'imagens', 'analise juridica', 'notificacao de especialistas', 'lembrete automatico', 'email de especialistas'],
     specialists: Object.entries(SPECIALISTS).map(([area, s]) => ({ area, name: s.name })),
     config: {
       WHATSAPP_TOKEN: WHATSAPP_TOKEN ? '*** (definido)' : 'NAO DEFINIDO',
@@ -1833,6 +1896,7 @@ app.get('/health', (req, res) => {
       LEAD_TEMPLATE_NAME: LEAD_TEMPLATE_NAME ? LEAD_TEMPLATE_NAME : 'NAO DEFINIDO',
       TEMPLATE_LANG: TEMPLATE_LANG,
       SUPABASE: supabaseEnabled() ? 'conectado' : 'NAO DEFINIDO',
+      TRANSCRIBE_API_KEY: TRANSCRIBE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
       VERIFY_TOKEN: VERIFY_TOKEN
     }
   });
@@ -2111,6 +2175,32 @@ async function checarEmail() {
   }
 }
 
+async function checarTranscricao() {
+  if (!TRANSCRIBE_API_KEY) {
+    return diagResult('Transcrição de áudio (Groq/Whisper)', false, 'TRANSCRIBE_API_KEY não definida — áudios recebem a resposta pedindo texto.',
+      'Crie uma chave gratuita em console.groq.com > API Keys e adicione TRANSCRIBE_API_KEY no Render > Environment.');
+  }
+  try {
+    const r = await fetch(`${TRANSCRIBE_BASE_URL}/models`, {
+      headers: { Authorization: `Bearer ${TRANSCRIBE_API_KEY}` },
+      signal: AbortSignal.timeout(DIAG_TIMEOUT)
+    });
+    if (r.status === 401 || r.status === 403) {
+      return diagResult('Transcrição de áudio (Groq/Whisper)', false, `Chave recusada (HTTP ${r.status}).`,
+        'Gere uma nova chave em console.groq.com > API Keys e atualize TRANSCRIBE_API_KEY no Render.');
+    }
+    if (!r.ok) {
+      return diagResult('Transcrição de áudio (Groq/Whisper)', false, `Erro HTTP ${r.status}.`, 'Verifique a chave e o TRANSCRIBE_BASE_URL.');
+    }
+    const data = await r.json().catch(() => ({}));
+    const temModelo = (data.data || []).some(m => m.id === TRANSCRIBE_MODEL);
+    return diagResult('Transcrição de áudio (Groq/Whisper)', true,
+      `Chave válida. Modelo ${TRANSCRIBE_MODEL}${temModelo ? ' disponível' : ' (não listado — confira TRANSCRIBE_MODEL)'}.`);
+  } catch (e) {
+    return diagResult('Transcrição de áudio (Groq/Whisper)', false, `Erro: ${e.message}`, 'Verifique a chave e o TRANSCRIBE_BASE_URL.');
+  }
+}
+
 function checarVariaveis() {
   // Criticas: sem elas a Ana simplesmente nao responde.
   const criticas = [];
@@ -2132,10 +2222,10 @@ function checarVariaveis() {
 }
 
 async function rodarDiagnostico(opts = {}) {
-  const [claude, whats, webhook, supa, email] = await Promise.all([
-    checarClaude(), checarWhatsApp(), checarWebhookMeta(opts.waba), checarSupabase(), checarEmail()
+  const [claude, whats, webhook, supa, email, audio] = await Promise.all([
+    checarClaude(), checarWhatsApp(), checarWebhookMeta(opts.waba), checarSupabase(), checarEmail(), checarTranscricao()
   ]);
-  const checks = [checarVariaveis(), claude, whats, webhook, supa, email];
+  const checks = [checarVariaveis(), claude, whats, webhook, supa, email, audio];
   const criticos = [checks[0], claude, whats, webhook];
   return {
     momento: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
