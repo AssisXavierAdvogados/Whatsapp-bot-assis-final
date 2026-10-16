@@ -1007,8 +1007,75 @@ async function interpretTriageReply(message, senderNumber) {
 
 // Tratamento dedicado para mensagens vindas dos advogados do escritorio.
 // Eles NUNCA entram no fluxo de lead da Ana — sao contatos prioritarios.
+// Quebra um texto longo em partes que cabem numa mensagem do WhatsApp (limite ~4096),
+// cortando em espaco para nao partir palavra no meio.
+function splitForWhatsApp(text, max = 3800) {
+  if (text.length <= max) return [text];
+  const parts = [];
+  let rest = text;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf(' ', max);
+    if (cut < max * 0.5) cut = max;
+    parts.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+// Transcreve um audio enviado por um advogado do escritorio e devolve o TEXTO para ele
+// (ferramenta de ditado). Diferente do cliente, onde a transcricao e usada internamente
+// para a Ana responder: aqui o proprio texto e o resultado esperado.
+async function transcribeForSpecialist(message, senderNumber, nomeCurto) {
+  if (!TRANSCRIBE_API_KEY) {
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, a transcrição de áudio não está configurada no momento (falta a chave TRANSCRIBE_API_KEY no servidor).`);
+    return;
+  }
+
+  const media = message.audio || message.voice || {};
+  if (!media.id) {
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não consegui acessar esse áudio. Pode tentar enviar de novo?`);
+    return;
+  }
+
+  let transcript = null;
+  try {
+    const { url, mimeType } = await getMediaUrl(media.id);
+    const buffer = await downloadMedia(url);
+    transcript = await transcribeAudio(buffer, mimeType || media.mime_type);
+  } catch (e) {
+    console.error('[Transcricao] Erro ao baixar/transcrever audio do especialista:', e.response?.data?.error?.message || e.message);
+  }
+
+  if (!transcript || !transcript.trim()) {
+    await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não consegui transcrever esse áudio. Pode tentar gravar de novo, de preferência num ambiente mais silencioso?`);
+    return;
+  }
+
+  const texto = transcript.trim();
+  console.log(`[Transcricao] Audio de ${nomeCurto} transcrito (${texto.length} caracteres).`);
+
+  // Cabecalho separado do texto para que a transcricao fique limpa para copiar e colar
+  const partes = splitForWhatsApp(texto);
+  await sendWhatsAppMessage(
+    senderNumber,
+    `📝 *Transcrição do áudio*${partes.length > 1 ? ` — ${partes.length} partes` : ''}`
+  );
+  for (const parte of partes) {
+    await sendWhatsAppMessage(senderNumber, parte);
+  }
+}
+
 async function handleSpecialistMessage(message, senderNumber, specialist) {
   const nomeCurto = specialist.name;
+
+  // Audio de um advogado: transcreve e devolve o texto.
+  // De proposito NAO interpretamos a transcricao como resposta de triagem — um
+  // ditado longo poderia conter um "nao" solto e recusar um caso por engano.
+  if (message.type === 'audio' || message.type === 'voice') {
+    await transcribeForSpecialist(message, senderNumber, nomeCurto);
+    return;
+  }
 
   // So mensagens de texto podem ser resposta de triagem
   const triage = message.type === 'text'
