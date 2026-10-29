@@ -314,18 +314,46 @@ const SPECIALISTS = {
 const ADMIN_PHONE = '5544999784442';
 const ADMIN_EMAIL = 'willianr.assis@outlook.com';
 
-// Quem pode usar a Ana como ASSISTENTE PESSOAL (agenda, gastos, duvidas).
-// Restrito de proposito: o modo assistente lida com dados financeiros e pessoais,
-// entao fica so com Dr. Willian e Dra. Aline. Os demais advogados continuam
-// recebendo normalmente as triagens e notificacoes de casos — so nao tem
-// acesso a assistente. Para liberar alguem, basta acrescentar o numero aqui.
-const ASSISTENTE_AUTORIZADOS = [
-  '5544999784442', // Dr. Willian Assis
-  '5544991651532'  // Dra. Aline Xavier
+// ---------------------------------------------------------------------------
+// GRUPOS DA ASSISTENTE
+// O modo assistente (agenda, gastos, duvidas) trabalha por GRUPO, nao por numero.
+// Dr. Willian e Dra. Aline sao casados: compartilham a mesma agenda e os mesmos
+// gastos, e AMBOS recebem todos os lembretes — tanto faz quem registrou.
+//
+// Estar num grupo e o que da acesso a assistente. Quem nao esta em nenhum grupo
+// (ex: Dr. Rafael) continua recebendo triagens e notificacoes de casos
+// normalmente, mas nao acessa agenda nem gastos.
+//
+// Para criar outro grupo (ou dar acesso individual a alguem), basta acrescentar
+// uma entrada aqui — nada mais no codigo precisa mudar.
+// ---------------------------------------------------------------------------
+const GRUPOS_ASSISTENTE = [
+  {
+    id: 'casa-willian-aline',
+    nome: 'Dr. Willian e Dra. Aline',
+    membros: ['5544999784442', '5544991651532']
+  }
 ];
 
+function grupoDe(phone) {
+  return GRUPOS_ASSISTENTE.find(g => g.membros.some(m => phonesMatch(m, phone))) || null;
+}
+
+// Chave usada para guardar agenda e gastos: o grupo, quando houver
+function chaveAssistente(phone) {
+  const g = grupoDe(phone);
+  return g ? g.id : String(phone);
+}
+
+// Para quem enviar um lembrete/relatorio de uma determinada chave
+function destinatariosDe(chave) {
+  const g = GRUPOS_ASSISTENTE.find(x => x.id === chave);
+  const fones = g ? g.membros : [chave];
+  return fones.map(phone => ({ phone, specialist: findSpecialistByPhone(phone) }));
+}
+
 function podeUsarAssistente(phone) {
-  return ASSISTENTE_AUTORIZADOS.some(p => phonesMatch(p, phone));
+  return !!grupoDe(phone);
 }
 
 // --- Reconhecimento de numeros (especialistas) ---
@@ -1039,8 +1067,8 @@ const FUSO_BR = '-03:00'; // Brasil nao tem mais horario de verao
 const advConversation = {}; // fone -> historico em memoria
 
 function advRow(phone) { return `ADV#${phone}`; }
-function agendaRow(phone) { return `AGENDA#${phone}`; }
-function gastosRow(phone, ym) { return `GASTOS#${phone}#${ym}`; }
+function agendaRow(chave) { return `AGENDA#${chave}`; }
+function gastosRow(chave, ym) { return `GASTOS#${chave}#${ym}`; }
 
 // Chaves internas que NUNCA devem aparecer no painel de conversas de clientes
 function isInternalRow(phone) {
@@ -1070,23 +1098,23 @@ function novoId() {
 }
 
 // --- Agenda -----------------------------------------------------------------
-async function loadAgenda(phone) {
-  const saved = await supabaseLoadOne(agendaRow(phone));
+async function loadAgenda(chave) {
+  const saved = await supabaseLoadOne(agendaRow(chave));
   const items = saved?.meta?.items;
   return Array.isArray(items) ? items : [];
 }
-async function saveAgenda(phone, items) {
-  await supabaseUpsert(agendaRow(phone), [], { meta: { type: 'agenda', items }, handled: false });
+async function saveAgenda(chave, items) {
+  await supabaseUpsert(agendaRow(chave), [], { meta: { type: 'agenda', items }, handled: false });
 }
 
 // --- Gastos -----------------------------------------------------------------
-async function loadGastos(phone, ym) {
-  const saved = await supabaseLoadOne(gastosRow(phone, ym));
+async function loadGastos(chave, ym) {
+  const saved = await supabaseLoadOne(gastosRow(chave, ym));
   const items = saved?.meta?.items;
   return Array.isArray(items) ? items : [];
 }
-async function saveGastos(phone, ym, items) {
-  await supabaseUpsert(gastosRow(phone, ym), [], { meta: { type: 'gastos', ym, items }, handled: false });
+async function saveGastos(chave, ym, items) {
+  await supabaseUpsert(gastosRow(chave, ym), [], { meta: { type: 'gastos', ym, items }, handled: false });
 }
 
 // Monta o texto do relatorio do mes, agrupado por categoria
@@ -1111,12 +1139,25 @@ function montarRelatorio(items, ym) {
   const maiores = [...items]
     .sort((a, b) => Number(b.valor || 0) - Number(a.valor || 0))
     .slice(0, 5)
-    .map(g => `• ${fmtMoeda(g.valor)} — ${g.descricao || g.categoria}`);
+    .map(g => `• ${fmtMoeda(g.valor)} — ${g.descricao || g.categoria}${g.por ? ` (${g.por})` : ''}`);
+
+  // Quando mais de uma pessoa lancou no mes, mostra tambem quanto cada um registrou
+  const porPessoa = {};
+  for (const g of items) {
+    if (!g.por) continue;
+    porPessoa[g.por] = (porPessoa[g.por] || 0) + Number(g.valor || 0);
+  }
+  const blocoPessoa = Object.keys(porPessoa).length > 1
+    ? `\n\n*Quem lançou:*\n` + Object.entries(porPessoa)
+        .sort((a, b) => b[1] - a[1])
+        .map(([p, v]) => `• ${p}: ${fmtMoeda(v)}`).join('\n')
+    : '';
 
   return `📊 *Relatório de gastos — ${ym}*\n\n` +
     `*Total: ${fmtMoeda(total)}*  (${items.length} lançamentos)\n\n` +
-    `*Por categoria:*\n${linhas.join('\n')}\n\n` +
-    `*Maiores gastos:*\n${maiores.join('\n')}`;
+    `*Por categoria:*\n${linhas.join('\n')}` +
+    blocoPessoa +
+    `\n\n*Maiores gastos:*\n${maiores.join('\n')}`;
 }
 
 // --- Ferramentas disponiveis para a Ana no modo assistente -------------------
@@ -1176,36 +1217,46 @@ const ASSISTENTE_TOOLS = [
   },
   {
     name: 'relatorio_gastos',
-    description: 'Gera o relatorio de gastos de um mes, somando por categoria. Use quando pedirem "relatorio", "quanto gastei", "fechamento do mes".',
+    description: 'Gera o relatorio de gastos de um mes. Sem categoria, traz o total somado por categoria. Com categoria, detalha so aquela ("quanto gastamos com mercado esse mes?"). Use para "relatorio", "quanto gastamos", "fechamento do mes".',
     input_schema: {
       type: 'object',
       properties: {
-        mes: { type: 'string', description: 'Mes no formato AAAA-MM. Se nao informado, usa o mes atual.' }
+        mes: { type: 'string', description: 'Mes no formato AAAA-MM. Se nao informado, usa o mes atual.' },
+        categoria: {
+          type: 'string',
+          enum: ['mercado', 'alimentacao', 'transporte', 'combustivel', 'escola', 'saude', 'moradia', 'lazer', 'escritorio', 'outros'],
+          description: 'Opcional. Informe para detalhar apenas uma categoria.'
+        }
       }
     }
   }
 ];
 
-async function executeAssistenteTool(toolName, input, phone) {
+async function executeAssistenteTool(toolName, input, phone, specialist) {
+  // Agenda e gastos sao do GRUPO (casal), nao do numero: tanto faz quem registrou,
+  // os dois enxergam tudo e os dois recebem os lembretes.
+  const chave = chaveAssistente(phone);
+  const quem = specialist?.name || phone;
+
   if (toolName === 'agendar_compromisso') {
-    const items = await loadAgenda(phone);
+    const items = await loadAgenda(chave);
     const id = novoId();
     items.push({
       id, tipo: input.tipo, titulo: input.titulo, inicio: input.inicio,
       local: input.local || null, cliente: input.cliente || null,
-      observacao: input.observacao || null, avisos: []
+      observacao: input.observacao || null, por: quem, avisos: []
     });
     items.sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
-    await saveAgenda(phone, items);
-    console.log(`[Assistente] Compromisso ${id} agendado para ${phone}: ${input.titulo} em ${input.inicio}`);
-    return `Compromisso registrado com o codigo ${id} para ${fmtDataHora(input.inicio)}. Os lembretes automaticos ja estao ativos.`;
+    await saveAgenda(chave, items);
+    console.log(`[Assistente] Compromisso ${id} agendado por ${quem} (${chave}): ${input.titulo} em ${input.inicio}`);
+    return `Compromisso registrado com o codigo ${id} para ${fmtDataHora(input.inicio)}. Os lembretes automaticos ja estao ativos para os dois.`;
   }
 
   if (toolName === 'listar_agenda') {
     const dias = Number(input.dias) > 0 ? Number(input.dias) : 30;
     const agora = new Date();
     const limite = new Date(agora.getTime() + dias * 24 * 60 * 60 * 1000);
-    const items = (await loadAgenda(phone))
+    const items = (await loadAgenda(chave))
       .filter(i => {
         const d = new Date(i.inicio);
         return d >= new Date(agora.getTime() - 60 * 60 * 1000) && d <= limite;
@@ -1214,36 +1265,47 @@ async function executeAssistenteTool(toolName, input, phone) {
     return items.map(i =>
       `[${i.id}] ${fmtDataHora(i.inicio)} — ${i.titulo}` +
       (i.local ? ` (${i.local})` : '') +
-      (i.cliente ? ` — cliente: ${i.cliente}` : '')
+      (i.cliente ? ` — cliente: ${i.cliente}` : '') +
+      (i.por ? ` — registrado por ${i.por}` : '')
     ).join('\n');
   }
 
   if (toolName === 'cancelar_compromisso') {
-    const items = await loadAgenda(phone);
+    const items = await loadAgenda(chave);
     const idx = items.findIndex(i => i.id === String(input.id || '').toUpperCase());
     if (idx === -1) return `Nao encontrei nenhum compromisso com o codigo ${input.id}.`;
     const [removido] = items.splice(idx, 1);
-    await saveAgenda(phone, items);
+    await saveAgenda(chave, items);
     return `Compromisso cancelado: ${removido.titulo} (${fmtDataHora(removido.inicio)}).`;
   }
 
   if (toolName === 'registrar_gasto') {
     const data = input.data || nowBR().toISOString().slice(0, 10);
     const ym = data.slice(0, 7);
-    const items = await loadGastos(phone, ym);
+    const items = await loadGastos(chave, ym);
     items.push({
       id: novoId(), valor: Number(input.valor), categoria: input.categoria,
-      descricao: input.descricao, data
+      descricao: input.descricao, data, por: quem
     });
-    await saveGastos(phone, ym, items);
+    await saveGastos(chave, ym, items);
     const total = items.reduce((s, g) => s + Number(g.valor || 0), 0);
-    console.log(`[Assistente] Gasto registrado para ${phone}: ${input.valor} (${input.categoria})`);
+    console.log(`[Assistente] Gasto registrado por ${quem} (${chave}): ${input.valor} (${input.categoria})`);
     return `Gasto de ${fmtMoeda(input.valor)} em "${input.categoria}" registrado. Total do mes ate agora: ${fmtMoeda(total)}.`;
   }
 
   if (toolName === 'relatorio_gastos') {
     const ym = input.mes || ymAtual();
-    const items = await loadGastos(phone, ym);
+    const items = await loadGastos(chave, ym);
+    if (input.categoria) {
+      const cat = String(input.categoria).toLowerCase();
+      const filtrados = items.filter(g => String(g.categoria).toLowerCase() === cat);
+      if (!filtrados.length) return `Nenhum gasto em "${cat}" registrado em ${ym}.`;
+      const total = filtrados.reduce((s, g) => s + Number(g.valor || 0), 0);
+      const linhas = filtrados
+        .sort((a, b) => Number(b.valor || 0) - Number(a.valor || 0))
+        .map(g => `• ${fmtMoeda(g.valor)} — ${g.descricao}${g.por ? ` (${g.por})` : ''}`);
+      return `*${cat} — ${ym}*\nTotal: ${fmtMoeda(total)} em ${filtrados.length} lancamento(s)\n\n${linhas.join('\n')}`;
+    }
     return montarRelatorio(items, ym);
   }
 
@@ -1252,7 +1314,22 @@ async function executeAssistenteTool(toolName, input, phone) {
 
 // Prompt do modo assistente. Inclui a data/hora atual para que a Ana consiga
 // interpretar "dia 12", "amanha as 14h", "semana que vem" corretamente.
-function buildAssistenteSystemPrompt(specialist) {
+function buildAssistenteSystemPrompt(specialist, phone) {
+  const grupo = grupoDe(phone);
+  const outros = grupo
+    ? grupo.membros
+        .map(m => findSpecialistByPhone(m)?.name)
+        .filter(n => n && n !== specialist.name)
+    : [];
+
+  const blocoCompartilhado = outros.length
+    ? `\nAGENDA E GASTOS SAO COMPARTILHADOS com ${outros.join(' e ')}.
+Os dois lancam no mesmo lugar e os dois enxergam tudo — e normal e esperado.
+Quando ele disser "nos gastamos" ou "nossa agenda", e exatamente isso: o conjunto dos dois.
+Os lembretes de cada compromisso vao automaticamente para os dois, nao importa quem registrou.
+Cada lancamento guarda quem fez, entao voce consegue responder tanto o total quanto o de cada um.\n`
+    : '';
+
   const agora = nowBR();
   const dataHoje = agora.toLocaleString('pt-BR', {
     timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit',
@@ -1268,6 +1345,7 @@ sem script de atendimento, sem se apresentar. Voce e a assistente dele no dia a 
 DATA E HORA ATUAL: ${dataHoje} (horario de Brasilia).
 Use isso para interpretar datas relativas ("amanha", "dia 12", "sexta que vem", "semana que vem").
 Ao agendar, sempre converta para ISO com fuso -03:00.
+${blocoCompartilhado}
 
 O QUE VOCE FAZ POR ELE:
 1) AGENDA — audiencias, reunioes, prazos e lembretes. Registre assim que ele mencionar algo com
@@ -1326,7 +1404,7 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
         {
           model: 'claude-opus-4-8',
           max_tokens: 1500,
-          system: buildAssistenteSystemPrompt(specialist),
+          system: buildAssistenteSystemPrompt(specialist, phone),
           tools: ASSISTENTE_TOOLS,
           messages
         },
@@ -1350,7 +1428,7 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
       messages.push({ role: 'assistant', content });
       advConversation[phone].push({ role: 'assistant', content, ts: new Date().toISOString() });
 
-      const result = await executeAssistenteTool(toolUse.name, toolUse.input, phone);
+      const result = await executeAssistenteTool(toolUse.name, toolUse.input, phone, specialist);
 
       const toolResultMsg = {
         role: 'user',
@@ -1425,6 +1503,14 @@ function textoLembrete(item, quando) {
   return linhas.join('\n');
 }
 
+// Envia o lembrete a TODOS os membros do grupo (o casal recebe os dois avisos,
+// nao importa quem tenha registrado o compromisso).
+async function enviarLembreteGrupo(chave, item, quando) {
+  for (const { phone, specialist } of destinatariosDe(chave)) {
+    await enviarLembrete(phone, specialist, item, quando);
+  }
+}
+
 async function enviarLembrete(phone, specialist, item, quando) {
   const texto = textoLembrete(item, quando);
 
@@ -1455,11 +1541,10 @@ async function checarLembretes() {
   const agora = Date.now();
 
   for (const linha of linhas) {
-    const phone = String(linha.phone).replace(/^AGENDA#/, '');
+    const chave = String(linha.phone).replace(/^AGENDA#/, '');
     const items = linha.meta?.items;
     if (!Array.isArray(items) || !items.length) continue;
 
-    const specialist = findSpecialistByPhone(phone);
     let mudou = false;
 
     for (const item of items) {
@@ -1476,13 +1561,13 @@ async function checarLembretes() {
       const dentroJanela = (alvo, minutos) => agora >= alvo && agora - alvo <= minutos * 60 * 1000;
 
       if (!item.avisos.includes('dia') && dentroJanela(avisoDia, 120) && agora < inicio.getTime()) {
-        await enviarLembrete(phone, specialist, item, 'dia');
+        await enviarLembreteGrupo(chave, item, 'dia');
         item.avisos.push('dia');
         mudou = true;
       }
 
       if (!item.avisos.includes('antes') && dentroJanela(avisoAntes, LEMBRETE_MIN_ANTES + 10)) {
-        await enviarLembrete(phone, specialist, item, 'antes');
+        await enviarLembreteGrupo(chave, item, 'antes');
         item.avisos.push('antes');
         mudou = true;
       }
@@ -1496,7 +1581,7 @@ async function checarLembretes() {
     });
     if (vivos.length !== items.length) mudou = true;
 
-    if (mudou) await saveAgenda(phone, vivos);
+    if (mudou) await saveAgenda(chave, vivos);
   }
 }
 
@@ -1513,25 +1598,23 @@ async function checarRelatorioMensal() {
     if (!String(linha.phone).endsWith(`#${ym}`)) continue;
     if (linha.meta?.relatorioEnviado) continue;
 
-    const phone = String(linha.phone).replace(/^GASTOS#/, '').replace(`#${ym}`, '');
+    const chave = String(linha.phone).replace(/^GASTOS#/, '').replace(`#${ym}`, '');
     const items = Array.isArray(linha.meta?.items) ? linha.meta.items : [];
     if (!items.length) continue;
 
-    const specialist = findSpecialistByPhone(phone);
     const texto = montarRelatorio(items, ym);
+    const html = `<div style="font-family:Arial,sans-serif;max-width:600px"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:15px">${texto.replace(/\*/g, '')}</pre></div>`;
 
-    try { await enviarLongo(phone, texto); } catch (e) { console.error('[Relatorio] WhatsApp:', e.message); }
-
-    if (specialist?.email) {
-      await sendEmailToSpecialist(
-        specialist.email,
-        `Relatório de gastos — ${ym}`,
-        `<div style="font-family:Arial,sans-serif;max-width:600px"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:15px">${texto.replace(/\*/g, '')}</pre></div>`
-      );
+    // O relatorio vai para todos do grupo (o casal recebe os dois)
+    for (const { phone, specialist } of destinatariosDe(chave)) {
+      try { await enviarLongo(phone, texto); } catch (e) { console.error('[Relatorio] WhatsApp:', e.message); }
+      if (specialist?.email) {
+        await sendEmailToSpecialist(specialist.email, `Relatório de gastos — ${ym}`, html);
+      }
+      console.log(`[Relatorio] Enviado para ${specialist?.name || phone} (${ym})`);
     }
 
     await supabaseUpsert(linha.phone, [], { meta: { ...linha.meta, relatorioEnviado: true } });
-    console.log(`[Relatorio] Enviado para ${specialist?.name || phone} (${ym})`);
   }
 }
 
