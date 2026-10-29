@@ -1009,6 +1009,354 @@ async function interpretTriageReply(message, senderNumber) {
 // Eles NUNCA entram no fluxo de lead da Ana — sao contatos prioritarios.
 // Quebra um texto longo em partes que cabem numa mensagem do WhatsApp (limite ~4096),
 // cortando em espaco para nao partir palavra no meio.
+// ===========================================================================
+// MODO ASSISTENTE — a Ana como secretaria/assistente dos advogados do escritorio.
+// Vive inteiramente dentro do caminho dos especialistas: o atendimento aos
+// clientes nao e tocado por nada daqui.
+//
+// Armazenamento: reaproveita a tabela "conversations" do Supabase com chaves
+// proprias (mesmo truque ja usado na triagem), sem precisar de tabela nova:
+//   ADV#<fone>              -> historico da conversa do advogado com a Ana
+//   AGENDA#<fone>           -> compromissos (audiencias, reunioes, prazos)
+//   GASTOS#<fone>#<AAAA-MM> -> gastos do mes
+// ===========================================================================
+
+const FUSO_BR = '-03:00'; // Brasil nao tem mais horario de verao
+const advConversation = {}; // fone -> historico em memoria
+
+function advRow(phone) { return `ADV#${phone}`; }
+function agendaRow(phone) { return `AGENDA#${phone}`; }
+function gastosRow(phone, ym) { return `GASTOS#${phone}#${ym}`; }
+
+// Chaves internas que NUNCA devem aparecer no painel de conversas de clientes
+function isInternalRow(phone) {
+  return /^(TRIAGE|ADV|AGENDA|GASTOS)#/.test(String(phone || ''));
+}
+
+function nowBR() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+}
+function ymAtual() {
+  const d = nowBR();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function fmtDataHora(iso) {
+  try {
+    return new Date(iso).toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit',
+      year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  } catch { return iso; }
+}
+function fmtMoeda(v) {
+  return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+function novoId() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+// --- Agenda -----------------------------------------------------------------
+async function loadAgenda(phone) {
+  const saved = await supabaseLoadOne(agendaRow(phone));
+  const items = saved?.meta?.items;
+  return Array.isArray(items) ? items : [];
+}
+async function saveAgenda(phone, items) {
+  await supabaseUpsert(agendaRow(phone), [], { meta: { type: 'agenda', items }, handled: false });
+}
+
+// --- Gastos -----------------------------------------------------------------
+async function loadGastos(phone, ym) {
+  const saved = await supabaseLoadOne(gastosRow(phone, ym));
+  const items = saved?.meta?.items;
+  return Array.isArray(items) ? items : [];
+}
+async function saveGastos(phone, ym, items) {
+  await supabaseUpsert(gastosRow(phone, ym), [], { meta: { type: 'gastos', ym, items }, handled: false });
+}
+
+// Monta o texto do relatorio do mes, agrupado por categoria
+function montarRelatorio(items, ym) {
+  if (!items.length) return `Nenhum gasto registrado em ${ym}.`;
+
+  const porCat = {};
+  let total = 0;
+  for (const g of items) {
+    const cat = g.categoria || 'outros';
+    porCat[cat] = (porCat[cat] || 0) + Number(g.valor || 0);
+    total += Number(g.valor || 0);
+  }
+
+  const linhas = Object.entries(porCat)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, v]) => {
+      const pct = total ? Math.round((v / total) * 100) : 0;
+      return `• ${cat}: ${fmtMoeda(v)} (${pct}%)`;
+    });
+
+  const maiores = [...items]
+    .sort((a, b) => Number(b.valor || 0) - Number(a.valor || 0))
+    .slice(0, 5)
+    .map(g => `• ${fmtMoeda(g.valor)} — ${g.descricao || g.categoria}`);
+
+  return `📊 *Relatório de gastos — ${ym}*\n\n` +
+    `*Total: ${fmtMoeda(total)}*  (${items.length} lançamentos)\n\n` +
+    `*Por categoria:*\n${linhas.join('\n')}\n\n` +
+    `*Maiores gastos:*\n${maiores.join('\n')}`;
+}
+
+// --- Ferramentas disponiveis para a Ana no modo assistente -------------------
+const ASSISTENTE_TOOLS = [
+  {
+    name: 'agendar_compromisso',
+    description: 'Registra um compromisso na agenda do advogado: audiencia, reuniao, prazo ou lembrete. Use sempre que ele informar algo com data/hora, mesmo de forma solta ("dia 12 as 14h tenho audiencia do caso Maria").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tipo: { type: 'string', enum: ['audiencia', 'reuniao', 'prazo', 'lembrete'], description: 'Tipo do compromisso' },
+        titulo: { type: 'string', description: 'Descricao curta (ex: "Audiencia trabalhista - Maria Silva")' },
+        inicio: { type: 'string', description: 'Data e hora de inicio no formato ISO com fuso de Brasilia, ex: 2026-11-12T14:00:00-03:00' },
+        local: { type: 'string', description: 'Local, vara, forum ou link da reuniao (opcional)' },
+        cliente: { type: 'string', description: 'Nome do cliente envolvido (opcional)' },
+        observacao: { type: 'string', description: 'Qualquer detalhe adicional (opcional)' }
+      },
+      required: ['tipo', 'titulo', 'inicio']
+    }
+  },
+  {
+    name: 'listar_agenda',
+    description: 'Lista os compromissos do advogado. Use quando ele perguntar sobre a agenda ("o que tenho essa semana?", "minhas audiencias", "tenho algo amanha?").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        dias: { type: 'number', description: 'Quantos dias a frente listar. Use 1 para hoje, 7 para a semana, 30 para o mes. Padrao 30.' }
+      }
+    }
+  },
+  {
+    name: 'cancelar_compromisso',
+    description: 'Cancela/remove um compromisso da agenda pelo codigo dele. Peca o codigo se nao souber (ele aparece ao listar a agenda).',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Codigo do compromisso' } },
+      required: ['id']
+    }
+  },
+  {
+    name: 'registrar_gasto',
+    description: 'Registra um gasto. Use sempre que o advogado relatar uma despesa ("mercado 320", "abasteci 200 reais", "paguei a escola"). Classifique a categoria com bom senso.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        valor: { type: 'number', description: 'Valor em reais (apenas numero)' },
+        categoria: {
+          type: 'string',
+          enum: ['mercado', 'alimentacao', 'transporte', 'combustivel', 'escola', 'saude', 'moradia', 'lazer', 'escritorio', 'outros'],
+          description: 'Categoria do gasto. "moradia" cobre agua, luz, aluguel, condominio.'
+        },
+        descricao: { type: 'string', description: 'Descricao curta do gasto' },
+        data: { type: 'string', description: 'Data do gasto em AAAA-MM-DD. Se nao informada, use hoje.' }
+      },
+      required: ['valor', 'categoria', 'descricao']
+    }
+  },
+  {
+    name: 'relatorio_gastos',
+    description: 'Gera o relatorio de gastos de um mes, somando por categoria. Use quando pedirem "relatorio", "quanto gastei", "fechamento do mes".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mes: { type: 'string', description: 'Mes no formato AAAA-MM. Se nao informado, usa o mes atual.' }
+      }
+    }
+  }
+];
+
+async function executeAssistenteTool(toolName, input, phone) {
+  if (toolName === 'agendar_compromisso') {
+    const items = await loadAgenda(phone);
+    const id = novoId();
+    items.push({
+      id, tipo: input.tipo, titulo: input.titulo, inicio: input.inicio,
+      local: input.local || null, cliente: input.cliente || null,
+      observacao: input.observacao || null, avisos: []
+    });
+    items.sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
+    await saveAgenda(phone, items);
+    console.log(`[Assistente] Compromisso ${id} agendado para ${phone}: ${input.titulo} em ${input.inicio}`);
+    return `Compromisso registrado com o codigo ${id} para ${fmtDataHora(input.inicio)}. Os lembretes automaticos ja estao ativos.`;
+  }
+
+  if (toolName === 'listar_agenda') {
+    const dias = Number(input.dias) > 0 ? Number(input.dias) : 30;
+    const agora = new Date();
+    const limite = new Date(agora.getTime() + dias * 24 * 60 * 60 * 1000);
+    const items = (await loadAgenda(phone))
+      .filter(i => {
+        const d = new Date(i.inicio);
+        return d >= new Date(agora.getTime() - 60 * 60 * 1000) && d <= limite;
+      });
+    if (!items.length) return `Nenhum compromisso nos proximos ${dias} dia(s).`;
+    return items.map(i =>
+      `[${i.id}] ${fmtDataHora(i.inicio)} — ${i.titulo}` +
+      (i.local ? ` (${i.local})` : '') +
+      (i.cliente ? ` — cliente: ${i.cliente}` : '')
+    ).join('\n');
+  }
+
+  if (toolName === 'cancelar_compromisso') {
+    const items = await loadAgenda(phone);
+    const idx = items.findIndex(i => i.id === String(input.id || '').toUpperCase());
+    if (idx === -1) return `Nao encontrei nenhum compromisso com o codigo ${input.id}.`;
+    const [removido] = items.splice(idx, 1);
+    await saveAgenda(phone, items);
+    return `Compromisso cancelado: ${removido.titulo} (${fmtDataHora(removido.inicio)}).`;
+  }
+
+  if (toolName === 'registrar_gasto') {
+    const data = input.data || nowBR().toISOString().slice(0, 10);
+    const ym = data.slice(0, 7);
+    const items = await loadGastos(phone, ym);
+    items.push({
+      id: novoId(), valor: Number(input.valor), categoria: input.categoria,
+      descricao: input.descricao, data
+    });
+    await saveGastos(phone, ym, items);
+    const total = items.reduce((s, g) => s + Number(g.valor || 0), 0);
+    console.log(`[Assistente] Gasto registrado para ${phone}: ${input.valor} (${input.categoria})`);
+    return `Gasto de ${fmtMoeda(input.valor)} em "${input.categoria}" registrado. Total do mes ate agora: ${fmtMoeda(total)}.`;
+  }
+
+  if (toolName === 'relatorio_gastos') {
+    const ym = input.mes || ymAtual();
+    const items = await loadGastos(phone, ym);
+    return montarRelatorio(items, ym);
+  }
+
+  return 'Ferramenta desconhecida.';
+}
+
+// Prompt do modo assistente. Inclui a data/hora atual para que a Ana consiga
+// interpretar "dia 12", "amanha as 14h", "semana que vem" corretamente.
+function buildAssistenteSystemPrompt(specialist) {
+  const agora = nowBR();
+  const dataHoje = agora.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit',
+    month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+
+  return `Voce e a Ana, assistente pessoal dos advogados do escritorio Assis e Xavier Advogados (Maringa/PR).
+
+AGORA voce esta falando com ${specialist.name}, que e ADVOGADO DO ESCRITORIO — nao e cliente.
+Trate-o como colega de trabalho: direta, tecnica, pratica e cordial. Sem formalidade excessiva,
+sem script de atendimento, sem se apresentar. Voce e a assistente dele no dia a dia.
+
+DATA E HORA ATUAL: ${dataHoje} (horario de Brasilia).
+Use isso para interpretar datas relativas ("amanha", "dia 12", "sexta que vem", "semana que vem").
+Ao agendar, sempre converta para ISO com fuso -03:00.
+
+O QUE VOCE FAZ POR ELE:
+1) AGENDA — audiencias, reunioes, prazos e lembretes. Registre assim que ele mencionar algo com
+   data/hora, mesmo solto. Nao peca confirmacao para o obvio: registre e confirme em uma linha.
+   Se faltar a hora, pergunte so a hora. Se faltar algo essencial, faca UMA pergunta curta.
+2) GASTOS — registre despesas que ele relatar e gere relatorios por categoria quando pedir.
+   Classifique a categoria sozinha, com bom senso. Nao fique perguntando categoria.
+3) DUVIDAS JURIDICAS RAPIDAS — raciocinio juridico, legislacao, doutrina, estrategia processual,
+   estrutura de peca. Respostas curtas e diretas, de colega para colega.
+4) CONVERSA EM GERAL — se ele so quiser pensar em voz alta sobre um caso, acompanhe.
+
+REGRA CRITICA SOBRE JURISPRUDENCIA E CITACOES:
+- Voce NAO tem acesso a internet nem a bases de tribunais. Nao consegue consultar julgados atuais.
+- NUNCA invente numero de processo, numero de sumula, tese de repetitivo, data de julgamento
+  ou ementa. Isso e inaceitavel: ele e advogado e pode levar o erro para uma peca.
+- Pode discutir entendimentos consolidados que voce conhece, mas SEMPRE deixe claro quando algo
+  precisa ser conferido no tribunal antes de usar. Use frases como "confira no STJ antes de citar".
+- Se nao tiver certeza, diga que nao tem certeza. Isso vale mais do que um palpite bem escrito.
+
+ESTILO:
+- WhatsApp: respostas curtas. Va direto ao ponto.
+- Use listas so quando ajudar de verdade (ex: listar a agenda).
+- Nada de "Claro!", "Com certeza!" repetidos. Nada de encerrar toda mensagem com oferta de ajuda.
+- Nunca mencione que voce e um modelo de IA especifico, nem fale de "prompt" ou "ferramentas".
+
+AUDIO:
+- Mensagens marcadas com [AUDIO TRANSCRITO] vieram de um audio que ele gravou.
+- Se for claramente um DITADO (texto corrido para ele reaproveitar em peca, e-mail ou documento),
+  devolva a transcricao EXATAMENTE como recebida, sem alterar nenhuma palavra, sem comentarios.
+- Se for um pedido ou comando ("agenda ai", "anota o gasto"), execute normalmente.`;
+}
+
+// Conversa do advogado com a Ana no modo assistente. Espelha o fluxo usado com os
+// clientes (historico saneado + tool use), mas com prompt e ferramentas proprios.
+async function callAssistenteAPI(userMessage, phone, specialist) {
+  return enqueueForUser(`ADV:${phone}`, () => callAssistenteInternal(userMessage, phone, specialist));
+}
+
+async function callAssistenteInternal(userMessage, phone, specialist) {
+  try {
+    if (!advConversation[phone]) {
+      const saved = await supabaseLoadOne(advRow(phone));
+      advConversation[phone] = Array.isArray(saved?.messages) ? saved.messages : [];
+    }
+
+    advConversation[phone].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
+
+    const messages = sanitizeMessages(
+      advConversation[phone].map(({ role, content }) => ({ role, content }))
+    );
+    let response;
+
+    while (true) {
+      response = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model: 'claude-opus-4-8',
+          max_tokens: 1500,
+          system: buildAssistenteSystemPrompt(specialist),
+          tools: ASSISTENTE_TOOLS,
+          messages
+        },
+        {
+          headers: {
+            'x-api-key': CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json'
+          }
+        }
+      );
+
+      const content = response.data.content;
+      const toolUse = content.find(b => b.type === 'tool_use');
+
+      if (!toolUse) {
+        advConversation[phone].push({ role: 'assistant', content: extractText(content), ts: new Date().toISOString() });
+        break;
+      }
+
+      messages.push({ role: 'assistant', content });
+      advConversation[phone].push({ role: 'assistant', content, ts: new Date().toISOString() });
+
+      const result = await executeAssistenteTool(toolUse.name, toolUse.input, phone);
+
+      const toolResultMsg = {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: result }]
+      };
+      messages.push(toolResultMsg);
+      advConversation[phone].push({ ...toolResultMsg, ts: new Date().toISOString() });
+    }
+
+    advConversation[phone] = trimHistory(advConversation[phone], 60);
+    supabaseUpsert(advRow(phone), advConversation[phone], { meta: { type: 'assistente', advogado: specialist.name } });
+
+    return extractText(response.data.content);
+
+  } catch (error) {
+    console.error('[Assistente] Erro:', error.response?.data || error.message);
+    return 'Tive um problema tecnico aqui. Pode repetir?';
+  }
+}
+
 function splitForWhatsApp(text, max = 3800) {
   if (text.length <= max) return [text];
   const parts = [];
@@ -1023,19 +1371,180 @@ function splitForWhatsApp(text, max = 3800) {
   return parts;
 }
 
-// Transcreve um audio enviado por um advogado do escritorio e devolve o TEXTO para ele
-// (ferramenta de ditado). Diferente do cliente, onde a transcricao e usada internamente
-// para a Ana responder: aqui o proprio texto e o resultado esperado.
-async function transcribeForSpecialist(message, senderNumber, nomeCurto) {
+// ===========================================================================
+// LEMBRETES AUTOMATICOS
+// Roda de minuto em minuto lendo a agenda do Supabase (e nao timers em memoria),
+// para que um restart do Render nao faca nenhum lembrete se perder.
+// O aviso vai por WhatsApp E por e-mail: o e-mail nao depende da janela de 24h
+// do WhatsApp nem da forma de pagamento da Meta, entao sempre chega.
+// ===========================================================================
+
+const LEMBRETE_HORA_DIA = 7;    // aviso matinal, no dia do compromisso
+const LEMBRETE_MIN_ANTES = 30;  // segundo aviso, minutos antes
+const RELATORIO_DIA = 1;        // dia do mes em que o relatorio de gastos e enviado
+const RELATORIO_HORA = 8;
+
+async function supabaseFindRows(prefixo) {
+  if (!supabaseEnabled()) return [];
+  try {
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?phone=like.${prefixo}*&select=phone,meta`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    return r.data || [];
+  } catch (e) {
+    console.error(`[Agendador] Erro ao ler ${prefixo}:`, e.message);
+    return [];
+  }
+}
+
+function textoLembrete(item, quando) {
+  const linhas = [
+    quando === 'dia' ? '📅 *Compromisso hoje*' : `⏰ *Começa em ${LEMBRETE_MIN_ANTES} minutos*`,
+    '',
+    `*${item.titulo}*`,
+    `🕐 ${fmtDataHora(item.inicio)}`
+  ];
+  if (item.local) linhas.push(`📍 ${item.local}`);
+  if (item.cliente) linhas.push(`👤 ${item.cliente}`);
+  if (item.observacao) linhas.push(`📝 ${item.observacao}`);
+  return linhas.join('\n');
+}
+
+async function enviarLembrete(phone, specialist, item, quando) {
+  const texto = textoLembrete(item, quando);
+
+  try {
+    await sendWhatsAppMessage(phone, texto);
+  } catch (e) {
+    console.error('[Lembrete] Falha no WhatsApp:', e.message);
+  }
+
+  if (specialist?.email) {
+    const html =
+      `<div style="font-family:Arial,sans-serif;max-width:600px">` +
+      `<h2 style="color:#1a5276">${quando === 'dia' ? 'Compromisso hoje' : `Começa em ${LEMBRETE_MIN_ANTES} minutos`}</h2>` +
+      `<p style="font-size:17px"><b>${item.titulo}</b></p>` +
+      `<p>🕐 ${fmtDataHora(item.inicio)}</p>` +
+      (item.local ? `<p>📍 ${item.local}</p>` : '') +
+      (item.cliente ? `<p>👤 ${item.cliente}</p>` : '') +
+      (item.observacao ? `<p>📝 ${item.observacao}</p>` : '') +
+      `<hr><small style="color:#888">Lembrete automático da Ana — Assis e Xavier Advogados</small></div>`;
+    await sendEmailToSpecialist(specialist.email, `Lembrete: ${item.titulo}`, html);
+  }
+
+  console.log(`[Lembrete] Enviado (${quando}) para ${specialist?.name || phone}: ${item.titulo}`);
+}
+
+async function checarLembretes() {
+  const linhas = await supabaseFindRows('AGENDA');
+  const agora = Date.now();
+
+  for (const linha of linhas) {
+    const phone = String(linha.phone).replace(/^AGENDA#/, '');
+    const items = linha.meta?.items;
+    if (!Array.isArray(items) || !items.length) continue;
+
+    const specialist = findSpecialistByPhone(phone);
+    let mudou = false;
+
+    for (const item of items) {
+      const inicio = new Date(item.inicio);
+      if (isNaN(inicio.getTime())) continue;
+      if (!Array.isArray(item.avisos)) item.avisos = [];
+
+      // 7h (Brasilia) do dia do compromisso
+      const diaBR = inicio.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+      const avisoDia = new Date(`${diaBR}T${String(LEMBRETE_HORA_DIA).padStart(2, '0')}:00:00${FUSO_BR}`).getTime();
+      const avisoAntes = inicio.getTime() - LEMBRETE_MIN_ANTES * 60 * 1000;
+
+      // A janela evita que um restart dispare lembretes antigos de uma vez so
+      const dentroJanela = (alvo, minutos) => agora >= alvo && agora - alvo <= minutos * 60 * 1000;
+
+      if (!item.avisos.includes('dia') && dentroJanela(avisoDia, 120) && agora < inicio.getTime()) {
+        await enviarLembrete(phone, specialist, item, 'dia');
+        item.avisos.push('dia');
+        mudou = true;
+      }
+
+      if (!item.avisos.includes('antes') && dentroJanela(avisoAntes, LEMBRETE_MIN_ANTES + 10)) {
+        await enviarLembrete(phone, specialist, item, 'antes');
+        item.avisos.push('antes');
+        mudou = true;
+      }
+    }
+
+    // Limpa compromissos com mais de 30 dias para a linha nao crescer sem fim
+    const limite = agora - 30 * 24 * 60 * 60 * 1000;
+    const vivos = items.filter(i => {
+      const d = new Date(i.inicio).getTime();
+      return isNaN(d) || d >= limite;
+    });
+    if (vivos.length !== items.length) mudou = true;
+
+    if (mudou) await saveAgenda(phone, vivos);
+  }
+}
+
+// Relatorio mensal de gastos, enviado uma vez por mes a cada advogado
+async function checarRelatorioMensal() {
+  const agora = nowBR();
+  if (agora.getDate() !== RELATORIO_DIA || agora.getHours() !== RELATORIO_HORA) return;
+
+  // Mes anterior
+  const ref = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+  const ym = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+
+  for (const linha of await supabaseFindRows('GASTOS')) {
+    if (!String(linha.phone).endsWith(`#${ym}`)) continue;
+    if (linha.meta?.relatorioEnviado) continue;
+
+    const phone = String(linha.phone).replace(/^GASTOS#/, '').replace(`#${ym}`, '');
+    const items = Array.isArray(linha.meta?.items) ? linha.meta.items : [];
+    if (!items.length) continue;
+
+    const specialist = findSpecialistByPhone(phone);
+    const texto = montarRelatorio(items, ym);
+
+    try { await enviarLongo(phone, texto); } catch (e) { console.error('[Relatorio] WhatsApp:', e.message); }
+
+    if (specialist?.email) {
+      await sendEmailToSpecialist(
+        specialist.email,
+        `Relatório de gastos — ${ym}`,
+        `<div style="font-family:Arial,sans-serif;max-width:600px"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:15px">${texto.replace(/\*/g, '')}</pre></div>`
+      );
+    }
+
+    await supabaseUpsert(linha.phone, [], { meta: { ...linha.meta, relatorioEnviado: true } });
+    console.log(`[Relatorio] Enviado para ${specialist?.name || phone} (${ym})`);
+  }
+}
+
+async function tarefasAgendadas() {
+  try { await checarLembretes(); } catch (e) { console.error('[Agendador] lembretes:', e.message); }
+  try { await checarRelatorioMensal(); } catch (e) { console.error('[Agendador] relatorio:', e.message); }
+}
+
+// Envia um texto possivelmente longo, quebrando no limite do WhatsApp
+async function enviarLongo(to, texto) {
+  for (const parte of splitForWhatsApp(String(texto || '').trim() || '...')) {
+    await sendWhatsAppMessage(to, parte);
+  }
+}
+
+// Transcreve um audio enviado por um advogado e DEVOLVE o texto (quem chama decide
+// o que fazer com ele). Em caso de falha, avisa o advogado e devolve null.
+async function transcreverAudioAdvogado(message, senderNumber, nomeCurto) {
   if (!TRANSCRIBE_API_KEY) {
     await sendWhatsAppMessage(senderNumber, `${nomeCurto}, a transcrição de áudio não está configurada no momento (falta a chave TRANSCRIBE_API_KEY no servidor).`);
-    return;
+    return null;
   }
 
   const media = message.audio || message.voice || {};
   if (!media.id) {
     await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não consegui acessar esse áudio. Pode tentar enviar de novo?`);
-    return;
+    return null;
   }
 
   let transcript = null;
@@ -1044,40 +1553,26 @@ async function transcribeForSpecialist(message, senderNumber, nomeCurto) {
     const buffer = await downloadMedia(url);
     transcript = await transcribeAudio(buffer, mimeType || media.mime_type);
   } catch (e) {
-    console.error('[Transcricao] Erro ao baixar/transcrever audio do especialista:', e.response?.data?.error?.message || e.message);
+    console.error('[Transcricao] Erro ao baixar/transcrever audio do advogado:', e.response?.data?.error?.message || e.message);
   }
 
   if (!transcript || !transcript.trim()) {
     await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não consegui transcrever esse áudio. Pode tentar gravar de novo, de preferência num ambiente mais silencioso?`);
-    return;
+    return null;
   }
 
   const texto = transcript.trim();
   console.log(`[Transcricao] Audio de ${nomeCurto} transcrito (${texto.length} caracteres).`);
-
-  // Cabecalho separado do texto para que a transcricao fique limpa para copiar e colar
-  const partes = splitForWhatsApp(texto);
-  await sendWhatsAppMessage(
-    senderNumber,
-    `📝 *Transcrição do áudio*${partes.length > 1 ? ` — ${partes.length} partes` : ''}`
-  );
-  for (const parte of partes) {
-    await sendWhatsAppMessage(senderNumber, parte);
-  }
+  return texto;
 }
 
 async function handleSpecialistMessage(message, senderNumber, specialist) {
   const nomeCurto = specialist.name;
 
-  // Audio de um advogado: transcreve e devolve o texto.
-  // De proposito NAO interpretamos a transcricao como resposta de triagem — um
-  // ditado longo poderia conter um "nao" solto e recusar um caso por engano.
-  if (message.type === 'audio' || message.type === 'voice') {
-    await transcribeForSpecialist(message, senderNumber, nomeCurto);
-    return;
-  }
-
-  // So mensagens de texto podem ser resposta de triagem
+  // A triagem (SIM/NAO) continua sendo tratada de forma deterministica, ANTES da
+  // Ana assistente: a decisao de assumir ou recusar um caso nunca pode depender de
+  // interpretacao. So texto pode ser resposta de triagem — de proposito, um audio
+  // nao decide caso (um ditado longo poderia conter um "nao" solto).
   const triage = message.type === 'text'
     ? await interpretTriageReply(message, senderNumber)
     : { none: true };
@@ -1109,8 +1604,8 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
     return;
   }
 
-  // Sem triagem pendente: permite consultar os casos aguardando decisao
-  if (message.type === 'text' && /\b(CASOS?|PENDENTE|TRIAGE|TRIAGEM)\b/i.test(message.text?.body || '')) {
+  // Atalho deterministico: "casos pendentes" lista as triagens aguardando decisao
+  if (message.type === 'text' && /\bcasos?\s+pendentes?\b/i.test(message.text?.body || '')) {
     const pend = await listPendingTriages(senderNumber);
     if (pend.length) {
       const lista = pend.map(p => `• ${p.code} — ${p.nome}`).join('\n');
@@ -1121,11 +1616,24 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
     return;
   }
 
-  // Qualquer outra mensagem do advogado: resposta profissional, sem intake de lead
-  await sendWhatsAppMessage(
-    senderNumber,
-    `Olá, ${nomeCurto}. Aqui é o atendimento automático da Ana. No momento não há nenhum caso em triagem aguardando sua resposta — assim que houver, envio por aqui. Se quiser ver os pendentes, é só escrever "casos".`
-  );
+  // Audio: transcreve e entrega o texto a Ana, que decide o que fazer com ele
+  // (agendar, registrar gasto, responder duvida, ou so devolver o ditado).
+  if (message.type === 'audio' || message.type === 'voice') {
+    const texto = await transcreverAudioAdvogado(message, senderNumber, nomeCurto);
+    if (!texto) return;
+    const reply = await callAssistenteAPI(`[AUDIO TRANSCRITO] ${texto}`, senderNumber, specialist);
+    await enviarLongo(senderNumber, reply);
+    return;
+  }
+
+  // Qualquer outra mensagem de texto: conversa aberta com a Ana assistente
+  if (message.type === 'text') {
+    const reply = await callAssistenteAPI(message.text?.body || '', senderNumber, specialist);
+    await enviarLongo(senderNumber, reply);
+    return;
+  }
+
+  await sendWhatsAppMessage(senderNumber, `${nomeCurto}, recebi — mas por aqui só consigo ler texto e áudio.`);
 }
 
 async function callClaudeAPI(userMessage, userId) {
@@ -1811,6 +2319,9 @@ app.get('/admin/conversations', async (req, res) => {
   const rows = await supabaseGetAll();
   if (rows) {
     for (const row of rows) {
+      // Linhas internas (triagem, agenda, gastos e as conversas dos advogados com a
+      // Ana assistente) nao sao atendimentos de cliente e nao entram no painel.
+      if (isInternalRow(row.phone)) continue;
       const textMsgs = onlyText(row.messages || []);
       if (textMsgs.length > 0) {
         result[row.phone] = {
@@ -2488,7 +2999,7 @@ async function montarTriagem(opts) {
 
   const clientes = [];
   for (const [phone, f] of Object.entries(fontes)) {
-    if (phone.startsWith('TRIAGE#')) continue;          // linhas internas de triagem trabalhista
+    if (isInternalRow(phone)) continue;                 // triagem, agenda, gastos e conversas dos advogados
     if (findSpecialistByPhone(phone)) continue;         // advogados do escritorio nao sao clientes
 
     const todas = (f.messages || []).map(m => ({ role: m.role, text: textoDe(m), ts: m.ts ? new Date(m.ts).getTime() : null }))
@@ -2655,6 +3166,13 @@ app.listen(PORT, () => {
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
   console.log(`Webhook: GET|POST /webhook`);
+
+  // Lembretes de agenda e relatorio mensal de gastos (modo assistente).
+  // Roda de minuto em minuto lendo o Supabase, entao sobrevive a restart.
+  if (supabaseEnabled()) {
+    setInterval(tarefasAgendadas, 60 * 1000);
+    console.log('[Agendador] Lembretes de agenda ativos (verificacao a cada minuto)');
+  }
 
   // Cutuca o Supabase a cada 6h para nao pausar por inatividade (limite de 7 dias)
   if (supabaseEnabled()) {
