@@ -1103,6 +1103,18 @@ function novoId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+// Normaliza nome para comparar: minusculo, sem acento e sem tratamento
+// ("Dra. Aline Xavier" e "aline" passam a casar).
+function normalizarNome(nome) {
+  return String(nome || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\b(dr|dra|doutor|doutora)\.?\b/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // --- Agenda -----------------------------------------------------------------
 async function loadAgenda(chave) {
   const saved = await supabaseLoadOne(agendaRow(chave));
@@ -1223,7 +1235,7 @@ const ASSISTENTE_TOOLS = [
   },
   {
     name: 'relatorio_gastos',
-    description: 'Gera o relatorio de gastos de um mes. Sem categoria, traz o total somado por categoria. Com categoria, detalha so aquela ("quanto gastamos com mercado esse mes?"). Use para "relatorio", "quanto gastamos", "fechamento do mes".',
+    description: 'Consulta os gastos de um mes. Sem filtro, traz o relatorio completo somado por categoria. Os filtros podem ser combinados e respondem perguntas como "quanto a Aline lancou?", "quanto gastamos com mercado?" ou "o que a Aline lancou de mercado?". Use para "relatorio", "quanto gastamos", "quanto fulano lancou", "fechamento do mes".',
     input_schema: {
       type: 'object',
       properties: {
@@ -1231,7 +1243,11 @@ const ASSISTENTE_TOOLS = [
         categoria: {
           type: 'string',
           enum: ['mercado', 'alimentacao', 'transporte', 'combustivel', 'escola', 'saude', 'moradia', 'lazer', 'escritorio', 'outros'],
-          description: 'Opcional. Informe para detalhar apenas uma categoria.'
+          description: 'Opcional. Informe para ver apenas uma categoria.'
+        },
+        pessoa: {
+          type: 'string',
+          description: 'Opcional. Nome de quem lancou, para ver so os gastos daquela pessoa (ex: "Aline"). Pode ser so o primeiro nome.'
         }
       }
     }
@@ -1320,18 +1336,44 @@ async function executeAssistenteTool(toolName, input, phone, specialist) {
 
   if (toolName === 'relatorio_gastos') {
     const ym = input.mes || ymAtual();
-    const items = await loadGastos(chave, ym);
+    let items = await loadGastos(chave, ym);
+    const filtros = [];
+
+    // Filtro por quem lancou. Comparacao tolerante: "aline", "Aline Xavier" e
+    // "Dra. Aline Xavier" devem todos casar com o mesmo lancador.
+    if (input.pessoa) {
+      const alvo = normalizarNome(input.pessoa);
+      const casa = (nome) => {
+        const n = normalizarNome(nome);
+        return n.includes(alvo) || alvo.includes(n) ||
+               alvo.split(' ').some(p => p.length > 2 && n.includes(p));
+      };
+      const antes = items.length;
+      items = items.filter(g => g.por && casa(g.por));
+      if (!items.length) {
+        const lancadores = [...new Set((await loadGastos(chave, ym)).map(g => g.por).filter(Boolean))];
+        return antes === 0
+          ? `Nenhum gasto registrado em ${ym}.`
+          : `Nenhum gasto de "${input.pessoa}" em ${ym}. Quem lancou nesse mes: ${lancadores.join(', ') || 'ninguem'}.`;
+      }
+      filtros.push(input.pessoa);
+    }
+
     if (input.categoria) {
       const cat = String(input.categoria).toLowerCase();
-      const filtrados = items.filter(g => String(g.categoria).toLowerCase() === cat);
-      if (!filtrados.length) return `Nenhum gasto em "${cat}" registrado em ${ym}.`;
-      const total = filtrados.reduce((s, g) => s + Number(g.valor || 0), 0);
-      const linhas = filtrados
-        .sort((a, b) => Number(b.valor || 0) - Number(a.valor || 0))
-        .map(g => `• ${fmtMoeda(g.valor)} — ${g.descricao}${g.por ? ` (${g.por})` : ''}`);
-      return `*${cat} — ${ym}*\nTotal: ${fmtMoeda(total)} em ${filtrados.length} lancamento(s)\n\n${linhas.join('\n')}`;
+      items = items.filter(g => String(g.categoria).toLowerCase() === cat);
+      if (!items.length) return `Nenhum gasto em "${cat}"${filtros.length ? ` de ${filtros[0]}` : ''} em ${ym}.`;
+      filtros.push(cat);
     }
-    return montarRelatorio(items, ym);
+
+    // Sem filtro nenhum: relatorio completo do mes, somado por categoria
+    if (!filtros.length) return montarRelatorio(items, ym);
+
+    const total = items.reduce((s, g) => s + Number(g.valor || 0), 0);
+    const linhas = items
+      .sort((a, b) => Number(b.valor || 0) - Number(a.valor || 0))
+      .map(g => `• ${fmtMoeda(g.valor)} — ${g.descricao} (${g.categoria}${g.por ? `, ${g.por}` : ''})`);
+    return `*${filtros.join(' / ')} — ${ym}*\nTotal: ${fmtMoeda(total)} em ${items.length} lancamento(s)\n\n${linhas.join('\n')}`;
   }
 
   return 'Ferramenta desconhecida.';
