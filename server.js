@@ -314,6 +314,20 @@ const SPECIALISTS = {
 const ADMIN_PHONE = '5544999784442';
 const ADMIN_EMAIL = 'willianr.assis@outlook.com';
 
+// Quem pode usar a Ana como ASSISTENTE PESSOAL (agenda, gastos, duvidas).
+// Restrito de proposito: o modo assistente lida com dados financeiros e pessoais,
+// entao fica so com Dr. Willian e Dra. Aline. Os demais advogados continuam
+// recebendo normalmente as triagens e notificacoes de casos — so nao tem
+// acesso a assistente. Para liberar alguem, basta acrescentar o numero aqui.
+const ASSISTENTE_AUTORIZADOS = [
+  '5544999784442', // Dr. Willian Assis
+  '5544991651532'  // Dra. Aline Xavier
+];
+
+function podeUsarAssistente(phone) {
+  return ASSISTENTE_AUTORIZADOS.some(p => phonesMatch(p, phone));
+}
+
 // --- Reconhecimento de numeros (especialistas) ---
 // No Brasil o Meta as vezes entrega o numero do celular SEM o 9 extra apos o DDD.
 // Geramos as duas formas (com e sem o 9) para comparar de forma tolerante e nao
@@ -1613,6 +1627,17 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
     } else {
       await sendWhatsAppMessage(senderNumber, `${nomeCurto}, não há nenhum caso em triagem aguardando sua decisão no momento.`);
     }
+    return;
+  }
+
+  // A partir daqui e o MODO ASSISTENTE (agenda, gastos, duvidas), restrito aos
+  // advogados autorizados. Quem nao tem acesso segue com o comportamento antigo:
+  // recebe triagens e notificacoes normalmente, mas nao conversa com a assistente.
+  if (!podeUsarAssistente(senderNumber)) {
+    await sendWhatsAppMessage(
+      senderNumber,
+      `Olá, ${nomeCurto}. Aqui é o atendimento automático da Ana. No momento não há nenhum caso em triagem aguardando sua resposta — assim que houver, envio por aqui. Se quiser ver os pendentes, é só escrever "casos pendentes".`
+    );
     return;
   }
 
