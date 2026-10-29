@@ -625,11 +625,17 @@ const conversationHistory = loadHistory();
 // Debounce: acumula mensagens picadas e processa juntas apos 8s de silencio
 const pendingMessages = {};
 
+// Junta TODOS os blocos de texto da resposta, nao apenas o primeiro.
+// Isso e essencial quando a Ana usa a busca na web: a API devolve
+// [texto "deixa eu buscar", busca, resultado da busca, texto com A RESPOSTA].
+// Pegar so o primeiro bloco faria a Ana anunciar a busca e nunca responder.
 function extractText(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    const textBlock = content.find(b => b.type === 'text');
-    return textBlock?.text || '';
+    return content
+      .filter(b => b.type === 'text' && typeof b.text === 'string' && b.text.trim())
+      .map(b => b.text.trim())
+      .join('\n\n');
   }
   return '';
 }
@@ -1237,8 +1243,8 @@ const ASSISTENTE_TOOLS = [
 // modelo, que e justamente a fonte do risco de "jurisprudencia inventada".
 // max_uses limita o custo por pergunta (a busca e cobrada por pesquisa).
 const BUSCA_TOOLS = [
-  { type: 'web_search_20260209', name: 'web_search', max_uses: 5 },
-  { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3, max_content_tokens: 20000 }
+  { type: 'web_search_20260209', name: 'web_search', max_uses: 3 },
+  { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 2, max_content_tokens: 12000 }
 ];
 
 // Remove do historico os blocos produzidos pelas ferramentas de servidor (busca e
@@ -1427,9 +1433,12 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
     );
     let response;
     let voltas = 0;
+    let custoDaPergunta = 0;
 
     while (true) {
-      if (++voltas > 12) {
+      // Cada volta reenvia a conversa inteira (inclusive resultados de busca, que
+      // sao grandes), entao cada volta extra custa dinheiro. Teto baixo de proposito.
+      if (++voltas > 6) {
         console.error('[Assistente] Limite de voltas atingido; encerrando o ciclo.');
         break;
       }
@@ -1455,6 +1464,14 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
       );
 
       const content = response.data.content;
+
+      // Registra o consumo REAL de cada volta, para medir custo com numero em vez
+      // de estimativa. Entrada x $5/MTok + saida x $25/MTok + $0,01 por busca.
+      const u = response.data.usage || {};
+      const buscas = u.server_tool_use?.web_search_requests || 0;
+      const custo = ((u.input_tokens || 0) / 1e6) * 5 + ((u.output_tokens || 0) / 1e6) * 25 + buscas * 0.01;
+      custoDaPergunta += custo;
+      console.log(`[Assistente][custo] volta ${voltas}: entrada=${u.input_tokens || 0} saida=${u.output_tokens || 0} buscas=${buscas} ~US$${custo.toFixed(4)}`);
 
       // A busca roda no servidor da Anthropic. Em pesquisas longas a API devolve
       // "pause_turn": basta devolver o conteudo para o modelo seguir de onde parou.
@@ -1485,6 +1502,8 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
       messages.push(toolResultMsg);
       advConversation[phone].push({ ...toolResultMsg, ts: new Date().toISOString() });
     }
+
+    console.log(`[Assistente][custo] TOTAL desta pergunta: ~US$${custoDaPergunta.toFixed(4)} em ${voltas} volta(s)`);
 
     advConversation[phone] = trimHistory(advConversation[phone], 60);
     supabaseUpsert(advRow(phone), advConversation[phone], { meta: { type: 'assistente', advogado: specialist.name } });
