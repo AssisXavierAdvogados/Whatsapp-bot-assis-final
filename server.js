@@ -1520,7 +1520,9 @@ function splitForWhatsApp(text, max = 3800) {
 // ===========================================================================
 
 const LEMBRETE_HORA_DIA = 7;    // aviso matinal, no dia do compromisso
-const LEMBRETE_MIN_ANTES = 30;  // segundo aviso, minutos antes
+// Avisos de antecedencia, em minutos antes do compromisso. Para acrescentar ou
+// remover um horario, basta mexer nesta lista.
+const LEMBRETE_ANTES_MIN = [30, 5];
 const RELATORIO_DIA = 1;        // dia do mes em que o relatorio de gastos e enviado
 const RELATORIO_HORA = 8;
 
@@ -1538,9 +1540,14 @@ async function supabaseFindRows(prefixo) {
   }
 }
 
-function textoLembrete(item, quando) {
+// "faltam" e calculado na hora do envio, entao o texto fica correto mesmo que o
+// aviso saia com algum atraso (ex: servidor reiniciando).
+function textoLembrete(item, quando, faltam) {
+  const cabecalho = quando === 'dia'
+    ? '📅 *Compromisso hoje*'
+    : (faltam <= 1 ? '🔔 *Começa agora*' : `⏰ *Começa em ${faltam} minutos*`);
   const linhas = [
-    quando === 'dia' ? '📅 *Compromisso hoje*' : `⏰ *Começa em ${LEMBRETE_MIN_ANTES} minutos*`,
+    cabecalho,
     '',
     `*${item.titulo}*`,
     `🕐 ${fmtDataHora(item.inicio)}`
@@ -1553,14 +1560,14 @@ function textoLembrete(item, quando) {
 
 // Envia o lembrete a TODOS os membros do grupo (o casal recebe os dois avisos,
 // nao importa quem tenha registrado o compromisso).
-async function enviarLembreteGrupo(chave, item, quando) {
+async function enviarLembreteGrupo(chave, item, quando, faltam) {
   for (const { phone, specialist } of destinatariosDe(chave)) {
-    await enviarLembrete(phone, specialist, item, quando);
+    await enviarLembrete(phone, specialist, item, quando, faltam);
   }
 }
 
-async function enviarLembrete(phone, specialist, item, quando) {
-  const texto = textoLembrete(item, quando);
+async function enviarLembrete(phone, specialist, item, quando, faltam) {
+  const texto = textoLembrete(item, quando, faltam);
 
   try {
     await sendWhatsAppMessage(phone, texto);
@@ -1571,7 +1578,7 @@ async function enviarLembrete(phone, specialist, item, quando) {
   if (specialist?.email) {
     const html =
       `<div style="font-family:Arial,sans-serif;max-width:600px">` +
-      `<h2 style="color:#1a5276">${quando === 'dia' ? 'Compromisso hoje' : `Começa em ${LEMBRETE_MIN_ANTES} minutos`}</h2>` +
+      `<h2 style="color:#1a5276">${quando === 'dia' ? 'Compromisso hoje' : (faltam <= 1 ? 'Começa agora' : `Começa em ${faltam} minutos`)}</h2>` +
       `<p style="font-size:17px"><b>${item.titulo}</b></p>` +
       `<p>🕐 ${fmtDataHora(item.inicio)}</p>` +
       (item.local ? `<p>📍 ${item.local}</p>` : '') +
@@ -1603,7 +1610,11 @@ async function checarLembretes() {
       // 7h (Brasilia) do dia do compromisso
       const diaBR = inicio.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
       const avisoDia = new Date(`${diaBR}T${String(LEMBRETE_HORA_DIA).padStart(2, '0')}:00:00${FUSO_BR}`).getTime();
-      const avisoAntes = inicio.getTime() - LEMBRETE_MIN_ANTES * 60 * 1000;
+      // Compromissos criados antes desta mudanca usavam a marca "antes" (so 30 min).
+      // Traduzimos para a marca nova para nao reenviar o de 30 que ja foi.
+      if (item.avisos.includes('antes') && !item.avisos.includes('antes30')) {
+        item.avisos.push('antes30');
+      }
 
       // A janela evita que um restart dispare lembretes antigos de uma vez so
       const dentroJanela = (alvo, minutos) => agora >= alvo && agora - alvo <= minutos * 60 * 1000;
@@ -1614,9 +1625,20 @@ async function checarLembretes() {
         mudou = true;
       }
 
-      if (!item.avisos.includes('antes') && dentroJanela(avisoAntes, LEMBRETE_MIN_ANTES + 10)) {
-        await enviarLembreteGrupo(chave, item, 'antes');
-        item.avisos.push('antes');
+      // Avisos de antecedencia (30 e 5 minutos). Se mais de um estiver vencido ao
+      // mesmo tempo — por exemplo o servidor voltou de um restart faltando 3 min —
+      // mandamos UMA mensagem so, com o tempo real que falta, e marcamos todos os
+      // vencidos como enviados para nao duplicar.
+      const vencidos = LEMBRETE_ANTES_MIN.filter(min =>
+        !item.avisos.includes(`antes${min}`) &&
+        agora >= inicio.getTime() - min * 60 * 1000 &&
+        agora < inicio.getTime()
+      );
+
+      if (vencidos.length) {
+        const faltam = Math.max(1, Math.round((inicio.getTime() - agora) / 60000));
+        await enviarLembreteGrupo(chave, item, 'antes', faltam);
+        for (const min of vencidos) item.avisos.push(`antes${min}`);
         mudou = true;
       }
     }
