@@ -1232,6 +1232,25 @@ const ASSISTENTE_TOOLS = [
   }
 ];
 
+// Ferramentas de SERVIDOR da Anthropic: rodam na infraestrutura deles, nao aqui.
+// Sao o que da a Ana acesso real a internet — sem isso ela so teria a memoria do
+// modelo, que e justamente a fonte do risco de "jurisprudencia inventada".
+// max_uses limita o custo por pergunta (a busca e cobrada por pesquisa).
+const BUSCA_TOOLS = [
+  { type: 'web_search_20260209', name: 'web_search', max_uses: 5 },
+  { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 3, max_content_tokens: 20000 }
+];
+
+// Remove do historico os blocos produzidos pelas ferramentas de servidor (busca e
+// leitura de pagina). Eles sao necessarios na ida e volta da chamada, mas guardar
+// resultados de busca inteiros faria cada mensagem seguinte reenviar tudo de novo.
+const BLOCOS_DE_BUSCA = ['server_tool_use', 'web_search_tool_result', 'web_fetch_tool_result'];
+function semBlocosDeBusca(content) {
+  if (!Array.isArray(content)) return content;
+  const filtrado = content.filter(b => !BLOCOS_DE_BUSCA.includes(b.type));
+  return filtrado.length ? filtrado : content;
+}
+
 async function executeAssistenteTool(toolName, input, phone, specialist) {
   // Agenda e gastos sao do GRUPO (casal), nao do numero: tanto faz quem registrou,
   // os dois enxergam tudo e os dois recebem os lembretes.
@@ -1358,12 +1377,22 @@ O QUE VOCE FAZ POR ELE:
 4) CONVERSA EM GERAL — se ele so quiser pensar em voz alta sobre um caso, acompanhe.
 
 REGRA CRITICA SOBRE JURISPRUDENCIA E CITACOES:
-- Voce NAO tem acesso a internet nem a bases de tribunais. Nao consegue consultar julgados atuais.
-- NUNCA invente numero de processo, numero de sumula, tese de repetitivo, data de julgamento
-  ou ementa. Isso e inaceitavel: ele e advogado e pode levar o erro para uma peca.
-- Pode discutir entendimentos consolidados que voce conhece, mas SEMPRE deixe claro quando algo
-  precisa ser conferido no tribunal antes de usar. Use frases como "confira no STJ antes de citar".
-- Se nao tiver certeza, diga que nao tem certeza. Isso vale mais do que um palpite bem escrito.
+Voce TEM acesso a internet pelas ferramentas web_search (pesquisar) e web_fetch (abrir uma pagina).
+
+- SEMPRE pesquise antes de afirmar qualquer coisa sobre jurisprudencia, sumula, tese de
+  repetitivo, numero de processo, prazo, data de julgamento ou texto de lei.
+  NUNCA responda isso de memoria, ainda que pareca obvio.
+- Ao citar, SEMPRE inclua o LINK da fonte. Ele e advogado e precisa conferir antes de usar
+  numa peca. Citacao sem link nao serve para nada.
+- Prefira fontes oficiais: sites dos tribunais (STF, STJ, TST, TRFs, TJs), planalto.gov.br
+  para legislacao, e diarios oficiais. Use fontes secundarias so como ponto de partida, e
+  diga claramente quando a fonte for secundaria.
+- Se a busca nao encontrar o que ele pediu, DIGA que nao encontrou. Nunca preencha a lacuna
+  com algo plausivel: um julgado inventado pode ir parar numa peca e e inaceitavel.
+- Se o resultado for ambiguo ou houver divergencia entre tribunais, diga isso em vez de
+  escolher um lado como se fosse pacifico.
+- Para raciocinio juridico geral, doutrina e estrategia, pode responder direto, sem pesquisar.
+  A regra de pesquisar vale para FATOS VERIFICAVEIS: numeros, datas, teses e textos legais.
 
 ESTILO:
 - WhatsApp: respostas curtas. Va direto ao ponto.
@@ -1397,15 +1426,23 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
       advConversation[phone].map(({ role, content }) => ({ role, content }))
     );
     let response;
+    let voltas = 0;
 
     while (true) {
+      if (++voltas > 12) {
+        console.error('[Assistente] Limite de voltas atingido; encerrando o ciclo.');
+        break;
+      }
+
       response = await axios.post(
         'https://api.anthropic.com/v1/messages',
         {
           model: 'claude-opus-4-8',
-          max_tokens: 1500,
+          max_tokens: 3000,
           system: buildAssistenteSystemPrompt(specialist, phone),
-          tools: ASSISTENTE_TOOLS,
+          // Ferramentas proprias (agenda/gastos) + ferramentas de servidor da
+          // Anthropic, que rodam do lado deles: busca na web e leitura de pagina.
+          tools: [...ASSISTENTE_TOOLS, ...BUSCA_TOOLS],
           messages
         },
         {
@@ -1418,6 +1455,14 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
       );
 
       const content = response.data.content;
+
+      // A busca roda no servidor da Anthropic. Em pesquisas longas a API devolve
+      // "pause_turn": basta devolver o conteudo para o modelo seguir de onde parou.
+      if (response.data.stop_reason === 'pause_turn') {
+        messages.push({ role: 'assistant', content });
+        continue;
+      }
+
       const toolUse = content.find(b => b.type === 'tool_use');
 
       if (!toolUse) {
@@ -1426,7 +1471,10 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
       }
 
       messages.push({ role: 'assistant', content });
-      advConversation[phone].push({ role: 'assistant', content, ts: new Date().toISOString() });
+      // No historico gravado, descartamos os blocos da busca: eles sao grandes e
+      // seriam reenviados (e cobrados) em toda mensagem seguinte da conversa.
+      // O que importa — a resposta com os links — fica no texto.
+      advConversation[phone].push({ role: 'assistant', content: semBlocosDeBusca(content), ts: new Date().toISOString() });
 
       const result = await executeAssistenteTool(toolUse.name, toolUse.input, phone, specialist);
 
