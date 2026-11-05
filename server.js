@@ -1270,7 +1270,10 @@ const BLOCOS_DE_BUSCA = ['server_tool_use', 'web_search_tool_result', 'web_fetch
 function semBlocosDeBusca(content) {
   if (!Array.isArray(content)) return content;
   const filtrado = content.filter(b => !BLOCOS_DE_BUSCA.includes(b.type));
-  return filtrado.length ? filtrado : content;
+  if (filtrado.length) return filtrado;
+  // Sobrou so bloco de busca: guardar isso no historico quebraria as proximas
+  // chamadas, entao gravamos um texto neutro no lugar.
+  return extractText(content) || '(consulta realizada)';
 }
 
 async function executeAssistenteTool(toolName, input, phone, specialist) {
@@ -1461,7 +1464,7 @@ async function callAssistenteAPI(userMessage, phone, specialist) {
   return enqueueForUser(`ADV:${phone}`, () => callAssistenteInternal(userMessage, phone, specialist));
 }
 
-async function callAssistenteInternal(userMessage, phone, specialist) {
+async function callAssistenteInternal(userMessage, phone, specialist, jaLimpou = false) {
   try {
     if (!advConversation[phone]) {
       const saved = await supabaseLoadOne(advRow(phone));
@@ -1553,7 +1556,25 @@ async function callAssistenteInternal(userMessage, phone, specialist) {
     return extractText(response.data.content);
 
   } catch (error) {
-    console.error('[Assistente] Erro:', error.response?.data || error.message);
+    const dados = error.response?.data;
+    console.error('[Assistente] Erro:', JSON.stringify(dados || error.message));
+
+    // Um historico corrompido trava TODAS as mensagens seguintes daquele numero:
+    // a conversa fica presa no "problema tecnico" para sempre, porque o historico
+    // ruim e recarregado a cada mensagem. Na primeira recusa da API, limpamos o
+    // historico e tentamos de novo — a conversa se recupera sozinha.
+    const recusadoPelaAPI =
+      error.response?.status === 400 || dados?.error?.type === 'invalid_request_error';
+
+    if (recusadoPelaAPI && !jaLimpou) {
+      console.error(`[Assistente] Historico de ${phone} recusado pela API; limpando e tentando de novo.`);
+      advConversation[phone] = [];
+      await supabaseUpsert(advRow(phone), [], {
+        meta: { type: 'assistente', advogado: specialist.name, limpoEm: new Date().toISOString() }
+      });
+      return callAssistenteInternal(userMessage, phone, specialist, true);
+    }
+
     return 'Tive um problema tecnico aqui. Pode repetir?';
   }
 }
