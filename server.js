@@ -1420,7 +1420,9 @@ ${blocoCompartilhado}
 O QUE VOCE FAZ POR ELE:
 1) AGENDA — audiencias, reunioes, prazos e lembretes. Registre assim que ele mencionar algo com
    data/hora, mesmo solto. Nao peca confirmacao para o obvio: registre e confirme em uma linha.
-   Se faltar a hora, pergunte so a hora. Se faltar algo essencial, faca UMA pergunta curta.
+   Se faltar a hora de uma audiencia ou reuniao, pergunte so a hora.
+   PRAZO nao tem hora: registre as 09:00 do dia, sem perguntar. Quando ele mandar varios
+   itens numa mensagem so, registre TODOS de uma vez e confirme com uma lista curta.
 2) GASTOS — registre despesas que ele relatar e gere relatorios por categoria quando pedir.
    Classifique a categoria sozinha, com bom senso. Nao fique perguntando categoria.
 3) DUVIDAS JURIDICAS RAPIDAS — raciocinio juridico, legislacao, doutrina, estrategia processual,
@@ -1492,7 +1494,7 @@ async function callAssistenteInternal(userMessage, phone, specialist, jaLimpou =
         'https://api.anthropic.com/v1/messages',
         {
           model: 'claude-opus-4-8',
-          max_tokens: 3000,
+          max_tokens: 8000,
           system: buildAssistenteSystemPrompt(specialist, phone),
           // Ferramentas proprias (agenda/gastos) + ferramentas de servidor da
           // Anthropic, que rodam do lado deles: busca na web e leitura de pagina.
@@ -1525,9 +1527,13 @@ async function callAssistenteInternal(userMessage, phone, specialist, jaLimpou =
         continue;
       }
 
-      const toolUse = content.find(b => b.type === 'tool_use');
+      // TODAS as ferramentas pedidas, nao so a primeira. Quando o advogado manda
+      // varios compromissos numa mensagem so, o modelo pede varios agendamentos
+      // de uma vez — e a API exige um tool_result para CADA pedido. Responder so
+      // o primeiro fazia a chamada seguinte ser recusada e travava a conversa.
+      const toolUses = content.filter(b => b.type === 'tool_use');
 
-      if (!toolUse) {
+      if (!toolUses.length) {
         advConversation[phone].push({ role: 'assistant', content: extractText(content), ts: new Date().toISOString() });
         break;
       }
@@ -1538,12 +1544,18 @@ async function callAssistenteInternal(userMessage, phone, specialist, jaLimpou =
       // O que importa — a resposta com os links — fica no texto.
       advConversation[phone].push({ role: 'assistant', content: semBlocosDeBusca(content), ts: new Date().toISOString() });
 
-      const result = await executeAssistenteTool(toolUse.name, toolUse.input, phone, specialist);
+      // Em SEQUENCIA, de proposito: agenda e gastos leem e regravam a mesma linha
+      // no banco. Em paralelo, um sobrescreveria o outro e lancamentos sumiriam.
+      const resultados = [];
+      for (const tu of toolUses) {
+        const r = await executeAssistenteTool(tu.name, tu.input, phone, specialist);
+        resultados.push({ type: 'tool_result', tool_use_id: tu.id, content: r });
+      }
+      if (toolUses.length > 1) {
+        console.log(`[Assistente] ${toolUses.length} ferramentas executadas nesta volta.`);
+      }
 
-      const toolResultMsg = {
-        role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: result }]
-      };
+      const toolResultMsg = { role: 'user', content: resultados };
       messages.push(toolResultMsg);
       advConversation[phone].push({ ...toolResultMsg, ts: new Date().toISOString() });
     }
@@ -1933,9 +1945,11 @@ async function callClaudeAPIInternal(userMessage, userId) {
       );
 
       const content = response.data.content;
-      const toolUseBlock = content.find(b => b.type === 'tool_use');
+      // Todas as ferramentas pedidas, nao so a primeira: a API exige um
+      // tool_result para CADA tool_use, senao recusa a chamada seguinte.
+      const toolUseBlocks = content.filter(b => b.type === 'tool_use');
 
-      if (!toolUseBlock) {
+      if (!toolUseBlocks.length) {
         const assistantText = extractText(content);
         conversationHistory[userId].push({ role: 'assistant', content: assistantText, ts: new Date().toISOString() });
         break;
@@ -1944,12 +1958,13 @@ async function callClaudeAPIInternal(userMessage, userId) {
       messages.push({ role: 'assistant', content });
       conversationHistory[userId].push({ role: 'assistant', content, ts: new Date().toISOString() });
 
-      const toolResult = await executeTool(toolUseBlock.name, toolUseBlock.input, userId);
+      const toolResults = [];
+      for (const tu of toolUseBlocks) {
+        const r = await executeTool(tu.name, tu.input, userId);
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: r });
+      }
 
-      const toolResultMsg = {
-        role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResult }]
-      };
+      const toolResultMsg = { role: 'user', content: toolResults };
       messages.push(toolResultMsg);
       conversationHistory[userId].push({ ...toolResultMsg, ts: new Date().toISOString() });
     }
