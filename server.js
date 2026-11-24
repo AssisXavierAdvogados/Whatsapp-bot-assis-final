@@ -1081,12 +1081,43 @@ function isInternalRow(phone) {
   return /^(TRIAGE|ADV|AGENDA|GASTOS)#/.test(String(phone || ''));
 }
 
-function nowBR() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+// Data e hora de Brasilia de um instante, em partes. E a UNICA fonte de "hoje" do
+// modo assistente. (A versao anterior convertia o fuso duas vezes: a Ana via a hora
+// 3h atrasada e, entre 00h e 03h, o dia anterior.)
+function partesBR(instante = new Date()) {
+  const p = {};
+  for (const { type, value } of new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(instante)) p[type] = value;
+  return {
+    ymd: `${p.year}-${p.month}-${p.day}`, ym: `${p.year}-${p.month}`,
+    ano: Number(p.year), mes: Number(p.month), dia: Number(p.day),
+    hora: Number(p.hour), hhmm: `${p.hour}:${p.minute}`
+  };
 }
-function ymAtual() {
-  const d = nowBR();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+function ymAtual() { return partesBR().ym; }
+
+// Dia do calendario (Brasilia) deslocado em N dias a partir de um AAAA-MM-DD
+function somaDias(ymd, n) {
+  const d = new Date(`${ymd}T12:00:00${FUSO_BR}`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return partesBR(d).ymd;
+}
+function diaSemana(ymd) {
+  return new Date(`${ymd}T12:00:00${FUSO_BR}`).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long' });
+}
+function ymdParaBR(ymd) { const [a, m, d] = ymd.split('-'); return `${d}/${m}/${a}`; }
+
+// Descreve uma data em relacao a hoje: "terca-feira, 24/11/2026 as 09:00 (hoje)".
+// Vai no retorno das ferramentas para a Ana conferir o dia que ela mesma calculou.
+function descreverData(iso, agora = new Date()) {
+  const alvo = partesBR(new Date(iso));
+  const hoje = partesBR(agora).ymd;
+  const dias = Math.round((new Date(`${alvo.ymd}T12:00:00${FUSO_BR}`) - new Date(`${hoje}T12:00:00${FUSO_BR}`)) / 86400000);
+  const rel = dias === 0 ? 'hoje' : dias === 1 ? 'amanha' : dias === -1 ? 'ontem'
+    : dias > 0 ? `daqui a ${dias} dias` : `ha ${-dias} dias`;
+  return `${diaSemana(alvo.ymd)}, ${ymdParaBR(alvo.ymd)} as ${alvo.hhmm} (${rel})`;
 }
 function fmtDataHora(iso) {
   try {
@@ -1283,6 +1314,16 @@ async function executeAssistenteTool(toolName, input, phone, specialist) {
   const quem = specialist?.name || phone;
 
   if (toolName === 'agendar_compromisso') {
+    const quando = new Date(input.inicio);
+    if (isNaN(quando.getTime())) {
+      return `NAO registrado: a data "${input.inicio}" e invalida. Use ISO com fuso -03:00.`;
+    }
+    // Um compromisso no passado quase sempre e erro de conta de data (ex: "amanha"
+    // calculado como hoje). Nao grava: devolve o problema para a Ana conferir.
+    if (quando.getTime() < Date.now() - 5 * 60 * 1000) {
+      return `NAO registrado: ${descreverData(input.inicio)} ja passou. Agora sao ${descreverData(new Date().toISOString())}. ` +
+        `Refaca a conta da data a partir do calendario do sistema e agende de novo; se a duvida continuar, pergunte a data ao advogado.`;
+    }
     const items = await loadAgenda(chave);
     const id = novoId();
     items.push({
@@ -1293,7 +1334,7 @@ async function executeAssistenteTool(toolName, input, phone, specialist) {
     items.sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
     await saveAgenda(chave, items);
     console.log(`[Assistente] Compromisso ${id} agendado por ${quem} (${chave}): ${input.titulo} em ${input.inicio}`);
-    return `Compromisso registrado com o codigo ${id} para ${fmtDataHora(input.inicio)}. Os lembretes automaticos ja estao ativos para os dois.`;
+    return `Compromisso registrado com o codigo ${id} para ${descreverData(input.inicio)}. Confira se esse e o dia que o advogado pediu e repita o dia da semana e a data na confirmacao. Os lembretes automaticos ja estao ativos para os dois.`;
   }
 
   if (toolName === 'listar_agenda') {
@@ -1324,7 +1365,7 @@ async function executeAssistenteTool(toolName, input, phone, specialist) {
   }
 
   if (toolName === 'registrar_gasto') {
-    const data = input.data || nowBR().toISOString().slice(0, 10);
+    const data = input.data || partesBR().ymd;
     const ym = data.slice(0, 7);
     const items = await loadGastos(chave, ym);
     items.push({
@@ -1400,11 +1441,14 @@ Os lembretes de cada compromisso vao automaticamente para os dois, nao importa q
 Cada lancamento guarda quem fez, entao voce consegue responder tanto o total quanto o de cada um.\n`
     : '';
 
-  const agora = nowBR();
-  const dataHoje = agora.toLocaleString('pt-BR', {
-    timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit',
-    month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
-  });
+  const hoje = partesBR();
+  const dataHoje = `${diaSemana(hoje.ymd)}, ${ymdParaBR(hoje.ymd)}, ${hoje.hhmm}`;
+  // Calendario ja calculado: a Ana LE o dia em vez de fazer conta de cabeca.
+  const calendario = Array.from({ length: 15 }, (_, i) => {
+    const d = somaDias(hoje.ymd, i);
+    const rotulo = i === 0 ? ' = HOJE' : i === 1 ? ' = AMANHA' : i === 2 ? ' = depois de amanha' : '';
+    return `${d} ${diaSemana(d)}${rotulo}`;
+  }).join('\n');
 
   return `Voce e a Ana, assistente pessoal dos advogados do escritorio Assis e Xavier Advogados (Maringa/PR).
 
@@ -1415,6 +1459,16 @@ sem script de atendimento, sem se apresentar. Voce e a assistente dele no dia a 
 DATA E HORA ATUAL: ${dataHoje} (horario de Brasilia).
 Use isso para interpretar datas relativas ("amanha", "dia 12", "sexta que vem", "semana que vem").
 Ao agendar, sempre converta para ISO com fuso -03:00.
+
+CALENDARIO (use esta tabela, nao faca conta de cabeca):
+${calendario}
+
+- "hoje", "amanha", "sexta", "semana que vem": localize o dia NA TABELA acima.
+- Cada mensagem dele vem com [data hora] na frente: e quando ELE enviou. Um "amanha" dito numa
+  mensagem antiga vale a partir da data daquela mensagem, nao de hoje.
+- Na confirmacao, escreva sempre o dia da semana e a data (ex: "quarta-feira, 25/11, as 9h").
+- Se a ferramenta devolver um dia diferente do que ele pediu, ou disser que a data ja passou,
+  corrija antes de responder. Nunca confirme um agendamento que a ferramenta recusou.
 ${blocoCompartilhado}
 
 O QUE VOCE FAZ POR ELE:
@@ -1476,7 +1530,12 @@ async function callAssistenteInternal(userMessage, phone, specialist, jaLimpou =
     advConversation[phone].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
 
     const messages = sanitizeMessages(
-      advConversation[phone].map(({ role, content }) => ({ role, content }))
+      advConversation[phone].map(({ role, content, ts }) => ({
+        role,
+        content: (role === 'user' && typeof content === 'string' && ts)
+          ? `[${fmtDataHora(ts)}] ${content}`
+          : content
+      }))
     );
     let response;
     let voltas = 0;
@@ -1751,12 +1810,13 @@ async function checarLembretes() {
 
 // Relatorio mensal de gastos, enviado uma vez por mes a cada advogado
 async function checarRelatorioMensal() {
-  const agora = nowBR();
-  if (agora.getDate() !== RELATORIO_DIA || agora.getHours() !== RELATORIO_HORA) return;
+  const agora = partesBR();
+  if (agora.dia !== RELATORIO_DIA || agora.hora !== RELATORIO_HORA) return;
 
   // Mes anterior
-  const ref = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
-  const ym = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+  const ym = agora.mes === 1
+    ? `${agora.ano - 1}-12`
+    : `${agora.ano}-${String(agora.mes - 1).padStart(2, '0')}`;
 
   for (const linha of await supabaseFindRows('GASTOS')) {
     if (!String(linha.phone).endsWith(`#${ym}`)) continue;
