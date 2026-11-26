@@ -489,6 +489,10 @@ APÓS A QUALIFICAÇÃO:
 - Confirme o nome do cliente.
 - Pergunte o melhor horário para o especialista ligar.
 - Com nome + horário: use a ferramenta notificar_especialista e encerre.
+- NUNCA diga que vai encaminhar, direcionar ou passar o caso ao especialista sem chamar a ferramenta
+  na MESMA resposta. Dizer que encaminhou sem chamar a ferramenta deixa o cliente sem retorno.
+- Se o cliente já contou o caso e deu o nome, mas não respondeu o horário ou disse "qualquer horário",
+  chame a ferramenta mesmo assim, com horário "não informado". Não fique esperando o horário.
 
 QUANDO O CLIENTE DISSER QUE O ESPECIALISTA NÃO LIGOU:
 - Use imediatamente a ferramenta reenviar_lembrete.
@@ -660,7 +664,7 @@ function buildSystemPrompt(userId) {
 async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null, attachments = []) {
   if (!BREVO_API_KEY || !EMAIL_FROM) {
     console.log('[Email] Credenciais nao configuradas, pulando envio.');
-    return;
+    return false;
   }
   try {
     const payload = {
@@ -681,8 +685,10 @@ async function sendEmailToSpecialist(toEmail, subject, htmlBody, ccEmail = null,
     const ccInfo = ccEmail && ccEmail !== toEmail ? ` (CC: ${ccEmail})` : '';
     const attInfo = attachments.length ? ` com ${attachments.length} anexo(s)` : '';
     console.log(`[Email] Enviado para ${toEmail}${ccInfo} via Brevo${attInfo}`);
+    return true;
   } catch (e) {
     console.error('[Email] Erro ao enviar:', e.response?.data || e.message);
+    return false;
   }
 }
 
@@ -766,8 +772,9 @@ async function executeTool(toolName, toolInput, clientPhone) {
     //    estiver pausado/reprovado pela Meta mas houver janela de 24h aberta, o
     //    especialista ainda recebe. Se nao houver janela, o Meta so rejeita e nada
     //    se perde. Perder um lead e muito pior que uma eventual mensagem duplicada.
+    let textoOk = false;
     try {
-      await sendWhatsAppMessage(specialist.phone, whatsappMsg);
+      textoOk = !!(await sendWhatsAppMessage(specialist.phone, whatsappMsg));
       console.log(`[Especialista] WhatsApp (texto livre) enviado para ${specialist.name} (template ${templateOk ? 'ok' : 'falhou'})`);
     } catch (e) {
       console.error('[Especialista] Erro WhatsApp:', e.message);
@@ -780,7 +787,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
     const documentos = clientDocuments[clientPhone] || [];
     console.log(`[Especialista] ${documentos.length} documento(s) encontrado(s) para anexar (${documentos.map(d => d.filename).join(', ') || 'nenhum'})`);
     const emailCc = specialist.email !== ADMIN_EMAIL ? ADMIN_EMAIL : null;
-    await sendEmailToSpecialist(
+    const emailOk = await sendEmailToSpecialist(
       specialist.email,
       `Novo Atendimento - ${areaLabel} | ${nome_cliente}`,
       emailHtml,
@@ -791,6 +798,15 @@ async function executeTool(toolName, toolInput, clientPhone) {
     // 3b) Tenta reenviar os documentos originais via WhatsApp (depende da janela de 24h)
     for (const doc of documentos) {
       await forwardDocumentToSpecialist(specialist.phone, doc.mediaId, doc.mimeType, doc.filename);
+    }
+    // Registro do encaminhamento: quando foi e o que cada via respondeu. E o que o
+    // painel, a assistente e a rede de seguranca usam para saber se o lead foi passado.
+    conversationMeta[clientPhone] = {
+      ...(conversationMeta[clientPhone] || {}),
+      notificacao: { em: new Date().toISOString(), especialista: specialist.name, template: !!templateOk, texto: textoOk, email: !!emailOk }
+    };
+    if (!templateOk && !textoOk && !emailOk) {
+      console.error(`[Especialista] NENHUMA via confirmou o envio do atendimento de ${nome_cliente} (+${clientPhone}) para ${specialist.name}.`);
     }
     delete clientDocuments[clientPhone];
     supabasePatch(clientPhone, { meta: { ...(conversationMeta[clientPhone] || {}), documents: [] } });
@@ -830,7 +846,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       console.log(`[Historico] Limpo para ${clientPhone} apos 3h do encerramento`);
     }, 3 * 60 * 60 * 1000);
 
-    return `Especialista ${specialist.name} notificado com sucesso.`;
+    return `Encaminhamento a ${specialist.name} registrado. Envio: template WhatsApp ${templateOk ? 'aceito' : 'FALHOU'}, texto WhatsApp ${textoOk ? 'aceito' : 'FALHOU'}, e-mail ${emailOk ? 'enviado' : 'FALHOU'}.`;
   }
 
   if (toolName === 'reenviar_lembrete') {
@@ -945,6 +961,12 @@ async function executeTool(toolName, toolInput, clientPhone) {
     } catch (e) {
       console.error('[Triagem] Erro ao enviar texto livre:', e.message);
     }
+
+    conversationMeta[clientPhone] = {
+      ...(conversationMeta[clientPhone] || {}),
+      nome: nome_cliente, area: 'TRABALHISTA', triagemEm: new Date().toISOString()
+    };
+    supabasePatch(clientPhone, { meta: { ...conversationMeta[clientPhone], documents: clientDocuments[clientPhone] || [] } });
 
     saveTriage(code, {
       clientPhone,
@@ -1265,6 +1287,16 @@ const ASSISTENTE_TOOLS = [
     }
   },
   {
+    name: 'listar_atendimentos',
+    description: 'Lista os clientes que entraram em contato pelo WhatsApp do escritorio e a situacao de cada um: encaminhado (a quem e por quais vias), em triagem, ou SEM encaminhamento. Use sempre que ele perguntar por clientes, leads, atendimentos, "quem entrou em contato", "foi direcionado para a Aline?", "o que chegou hoje?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        dias: { type: 'number', description: 'Quantos dias para tras olhar. Padrao 2. Use 1 para "hoje", 7 para "essa semana".' }
+      }
+    }
+  },
+  {
     name: 'relatorio_gastos',
     description: 'Consulta os gastos de um mes. Sem filtro, traz o relatorio completo somado por categoria. Os filtros podem ser combinados e respondem perguntas como "quanto a Aline lancou?", "quanto gastamos com mercado?" ou "o que a Aline lancou de mercado?". Use para "relatorio", "quanto gastamos", "quanto fulano lancou", "fechamento do mes".',
     input_schema: {
@@ -1378,6 +1410,35 @@ async function executeAssistenteTool(toolName, input, phone, specialist) {
     return `Gasto de ${fmtMoeda(input.valor)} em "${input.categoria}" registrado. Total do mes ate agora: ${fmtMoeda(total)}.`;
   }
 
+  if (toolName === 'listar_atendimentos') {
+    const dias = Math.min(Math.max(Number(input.dias) || 2, 1), 30);
+    const rows = await supabaseAtendimentosRecentes(dias * 24);
+    const linhas = [];
+    for (const row of rows) {
+      const a = situacaoAtendimento(row);
+      if (!a.doCliente.length) continue;
+      const m = a.meta;
+      const nome = m.nome || m.avisoPendente?.nome || 'nome nao informado';
+      const vias = (n) => ['template', 'texto', 'email'].filter(v => n && n[v]).join('+') || 'nenhuma via confirmada';
+      let status;
+      if (a.situacao === 'encaminhado') {
+        status = m.notificacao
+          ? `ENCAMINHADO a ${m.notificacao.especialista} em ${fmtDataHora(m.notificacao.em)} (vias: ${vias(m.notificacao)})`
+          : `ENCAMINHADO a ${m.especialista} (registro antigo, sem detalhe das vias)`;
+      } else if (a.situacao === 'em_triagem') {
+        status = `EM TRIAGEM trabalhista desde ${fmtDataHora(m.triagemEm)}`;
+      } else if (a.situacao === 'avisado_sem_encaminhamento') {
+        status = `SEM ENCAMINHAMENTO - aviso automatico enviado em ${fmtDataHora(m.avisoPendente.em)} (vias: ${vias(m.avisoPendente)})`;
+      } else {
+        status = 'SEM ENCAMINHAMENTO (conversa em andamento ou ainda nao avisada)';
+      }
+      const ultimaDoCliente = a.doCliente[a.doCliente.length - 1].text.replace(/\s+/g, ' ').slice(0, 140);
+      linhas.push(`- ${fmtDataHora(new Date(a.ultimoTs).toISOString())} | ${nome} | +${row.phone} | ${m.area || m.avisoPendente?.area || 'area nao definida'} | ${status}${row.handled ? ' | marcado como tratado no painel' : ''} | ultima msg do cliente: "${ultimaDoCliente}"`);
+    }
+    if (!linhas.length) return `Nenhum cliente entrou em contato nos ultimos ${dias} dia(s).`;
+    return `${linhas.length} atendimento(s) nos ultimos ${dias} dia(s):\n` + linhas.join('\n');
+  }
+
   if (toolName === 'relatorio_gastos') {
     const ym = input.mes || ymAtual();
     let items = await loadGastos(chave, ym);
@@ -1481,7 +1542,11 @@ O QUE VOCE FAZ POR ELE:
    Classifique a categoria sozinha, com bom senso. Nao fique perguntando categoria.
 3) DUVIDAS JURIDICAS RAPIDAS — raciocinio juridico, legislacao, doutrina, estrategia processual,
    estrutura de peca. Respostas curtas e diretas, de colega para colega.
-4) CONVERSA EM GERAL — se ele so quiser pensar em voz alta sobre um caso, acompanhe.
+4) ATENDIMENTOS DO ESCRITORIO — voce enxerga os clientes que entraram em contato pelo WhatsApp e
+   se cada um foi encaminhado ao especialista. Para qualquer pergunta sobre clientes, leads ou
+   encaminhamentos, use listar_atendimentos e responda com o que ela devolver. Destaque primeiro
+   os que estao SEM ENCAMINHAMENTO. Nunca diga que nao tem acesso aos atendimentos.
+5) CONVERSA EM GERAL — se ele so quiser pensar em voz alta sobre um caso, acompanhe.
 
 REGRA CRITICA SOBRE JURISPRUDENCIA E CITACOES:
 Voce TEM acesso a internet pelas ferramentas web_search (pesquisar) e web_fetch (abrir uma pagina).
@@ -1842,7 +1907,132 @@ async function checarRelatorioMensal() {
   }
 }
 
+// ===========================================================================
+// REDE DE SEGURANCA DOS ATENDIMENTOS
+// O encaminhamento ao especialista depende de a Ana chamar a ferramenta no fim da
+// conversa. Se o cliente some antes de dar nome/horario, ou se ela diz que vai
+// encaminhar e nao chama a ferramenta, o lead ficava so no painel, sem aviso.
+// Esta varredura garante que TODO cliente que escreveu chegue ao escritorio:
+// conversa parada ha REDE_MINUTOS_PARADO sem encaminhamento vira um aviso.
+// ===========================================================================
+const REDE_MINUTOS_PARADO = 20;
+const REDE_JANELA_HORAS = 24;
+const REDE_MAX_POR_VARREDURA = 10;
+let ultimaVarreduraRede = 0;
+
+async function supabaseAtendimentosRecentes(horas) {
+  if (!supabaseEnabled()) return [];
+  try {
+    const desde = new Date(Date.now() - horas * 60 * 60 * 1000).toISOString();
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?select=phone,messages,meta,handled,updated_at&updated_at=gte.${encodeURIComponent(desde)}&order=updated_at.desc`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    return (r.data || []).filter(row => !isInternalRow(row.phone) && !findSpecialistByPhone(row.phone));
+  } catch (e) {
+    console.error('[Rede] Erro ao ler atendimentos:', e.message);
+    return [];
+  }
+}
+
+// Resume uma linha de atendimento: mensagens de texto, ultimo contato e situacao
+function situacaoAtendimento(row) {
+  const textos = (row.messages || [])
+    .filter(m => typeof m.content === 'string' && m.content.trim())
+    .map(m => ({ role: m.role, text: m.content.trim(), ts: m.ts || null }));
+  const doCliente = textos.filter(m => m.role === 'user');
+  const ultima = textos[textos.length - 1];
+  const ultimoTs = new Date((ultima && ultima.ts) || row.updated_at || 0).getTime();
+  const meta = row.meta || {};
+  let situacao = 'sem_encaminhamento';
+  if (meta.notificacao || meta.especialista) situacao = 'encaminhado';
+  else if (meta.triagemEm) situacao = 'em_triagem';
+  else if (meta.avisoPendente) situacao = 'avisado_sem_encaminhamento';
+  return { textos, doCliente, ultimoTs, meta, situacao };
+}
+
+// Pede ao modelo area, nome e resumo de uma conversa que ficou sem encaminhamento.
+// Se falhar, devolve null e o aviso segue so com o trecho da conversa.
+async function resumirAtendimento(transcricao) {
+  try {
+    const r = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-opus-4-8',
+        max_tokens: 500,
+        system: 'Voce recebe a conversa de um cliente com a atendente de um escritorio de advocacia. Responda APENAS com um JSON, sem texto em volta: {"area": uma de [' +
+          Object.keys(SPECIALISTS).map(a => '"' + a + '"').join(', ') + ', "indefinida"], "nome": nome do cliente ou "nao informado", "resumo": resumo objetivo do caso em ate 3 frases}. Nao invente fatos que nao estejam na conversa.',
+        messages: [{ role: 'user', content: transcricao }]
+      },
+      { headers: { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    );
+    const texto = extractText(r.data.content);
+    const json = JSON.parse(texto.slice(texto.indexOf('{'), texto.lastIndexOf('}') + 1));
+    return { area: String(json.area || 'indefinida'), nome: String(json.nome || 'nao informado'), resumo: String(json.resumo || '') };
+  } catch (e) {
+    console.error('[Rede] Nao consegui resumir o atendimento:', e.response?.data?.error?.message || e.message);
+    return null;
+  }
+}
+
+async function checarAtendimentosSemEncaminhamento() {
+  if (Date.now() - ultimaVarreduraRede < 5 * 60 * 1000) return;
+  ultimaVarreduraRede = Date.now();
+
+  let avisados = 0;
+  for (const row of await supabaseAtendimentosRecentes(REDE_JANELA_HORAS)) {
+    if (avisados >= REDE_MAX_POR_VARREDURA) break;
+    if (row.handled) continue;
+    const a = situacaoAtendimento(row);
+    if (a.situacao !== 'sem_encaminhamento' || !a.doCliente.length) continue;
+    if (Date.now() - a.ultimoTs < REDE_MINUTOS_PARADO * 60 * 1000) continue;   // conversa ainda em andamento
+    if (pendingMessages[row.phone]) continue;
+
+    const transcricao = a.textos.slice(-30)
+      .map(m => `${m.role === 'user' ? 'Cliente' : 'Ana'}: ${m.text.slice(0, 400)}`).join('\n');
+    const info = await resumirAtendimento(transcricao);
+    const specialist = info && SPECIALISTS[info.area] ? SPECIALISTS[info.area] : null;
+    const areaLabel = specialist ? info.area.toUpperCase().replace('_', '/') : 'AREA A DEFINIR';
+    const nome = info && info.nome ? info.nome : 'nao informado';
+    const resumo = info && info.resumo ? info.resumo : transcricao.slice(0, 600);
+    const quando = fmtDataHora(new Date(a.ultimoTs).toISOString());
+
+    const texto =
+      `⚠️ *ATENDIMENTO SEM ENCAMINHAMENTO - ${areaLabel}*\n\n` +
+      `👤 *Cliente:* ${nome}\n📱 *WhatsApp:* +${row.phone}\n🕐 *Ultima mensagem:* ${quando}\n\n` +
+      `📋 *Resumo:* ${resumo}\n\n` +
+      `_A conversa parou sem que o caso fosse passado ao especialista. Vale entrar em contato com o cliente._`;
+    const html =
+      `<div style="font-family:Arial,sans-serif;max-width:640px">` +
+      `<h2 style="color:#b9770e">Atendimento sem encaminhamento - ${areaLabel}</h2>` +
+      `<p><b>Cliente:</b> ${nome}<br><b>WhatsApp:</b> +${row.phone}<br><b>Ultima mensagem:</b> ${quando}</p>` +
+      `<p><b>Resumo:</b> ${resumo}</p>` +
+      `<h3>Conversa</h3><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;background:#f6f6f6;padding:12px">${transcricao.replace(/</g, '&lt;')}</pre>` +
+      `<small style="color:#888">Aviso automatico da Ana: a conversa parou ha mais de ${REDE_MINUTOS_PARADO} minutos sem encaminhamento.</small></div>`;
+
+    // Admin sempre; o especialista da area tambem, quando deu para identificar
+    const destinos = [{ phone: ADMIN_PHONE, email: ADMIN_EMAIL }];
+    if (specialist && specialist.phone !== ADMIN_PHONE) destinos.push({ phone: specialist.phone, email: specialist.email });
+
+    const canais = { template: false, texto: false, email: false };
+    for (const d of destinos) {
+      if (await sendWhatsAppTemplate(d.phone, [`ATENCAO: atendimento sem encaminhamento (${areaLabel})`, nome, `+${row.phone}`, 'nao informado', resumo])) canais.template = true;
+      if (await sendWhatsAppMessage(d.phone, texto)) canais.texto = true;
+      if (await sendEmailToSpecialist(d.email, `Atendimento sem encaminhamento - ${areaLabel} | ${nome}`, html)) canais.email = true;
+    }
+
+    const avisoPendente = { em: new Date().toISOString(), area: areaLabel, nome, para: destinos.map(d => d.email), ...canais };
+    if (conversationHistory[row.phone]) {
+      conversationMeta[row.phone] = { ...(conversationMeta[row.phone] || {}), avisoPendente };
+    }
+    await supabasePatch(row.phone, { meta: { ...(row.meta || {}), avisoPendente } });
+    avisados++;
+    console.log(`[Rede] Aviso de atendimento sem encaminhamento: +${row.phone} (${areaLabel}) template=${canais.template} texto=${canais.texto} email=${canais.email}`);
+  }
+}
+
 async function tarefasAgendadas() {
+  try { await checarAtendimentosSemEncaminhamento(); } catch (e) { console.error('[Agendador] rede de seguranca:', e.message); }
   try { await checarLembretes(); } catch (e) { console.error('[Agendador] lembretes:', e.message); }
   try { await checarRelatorioMensal(); } catch (e) { console.error('[Agendador] relatorio:', e.message); }
 }
