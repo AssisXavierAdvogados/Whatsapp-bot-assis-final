@@ -20,6 +20,19 @@ Na tela de criação, role até **"Environment Variables"** e preencha:
 | `TWILIO_ACCOUNT_SID` | console.twilio.com → Account Info |
 | `TWILIO_AUTH_TOKEN` | console.twilio.com → Account Info |
 
+### Assinatura do webhook da Meta (`APP_SECRET`)
+
+Adicione também, em **Environment**:
+
+| Variável | Onde encontrar |
+|---|---|
+| `APP_SECRET` | developers.facebook.com → seu app → Configurações do app → Básico → Chave secreta do aplicativo |
+
+Com ela, o servidor valida a assinatura `X-Hub-Signature-256` de cada chamada ao `/webhook` e
+recusa (401) as que não vierem da Meta. Sem ela o bot continua funcionando, mas sem essa
+proteção: o log mostra um aviso e o `/health` mostra `"appSecret": false`. Após salvar a
+variável (o Render reinicia o serviço), confira que o `/health` passou a mostrar `"appSecret": true`.
+
 ## Passo 4: Fazer o deploy
 
 Toque em **"Create Web Service"**. Aguarde ~2 minutos.

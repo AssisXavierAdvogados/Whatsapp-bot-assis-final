@@ -51,7 +51,20 @@ TWILIO_PHONE=whatsapp:+14155238886
 ESCRITORIO_PHONE=+55 (44)99977-8551
 PORT=3000
 NODE_ENV=production
+APP_SECRET=chave_secreta_do_app_na_meta
 ```
+
+### `APP_SECRET` — validação da assinatura do webhook
+
+Cada chamada da Meta ao `POST /webhook` vem assinada no header `X-Hub-Signature-256`
+(HMAC-SHA256 do corpo com a chave secreta do aplicativo). Com `APP_SECRET` definida, o
+servidor confere essa assinatura e responde **401** a qualquer chamada que não bata — sem
+processar a mensagem.
+
+- Onde encontrar: Meta for Developers → seu app → **Configurações do app → Básico → Chave secreta do aplicativo**.
+- Se a variável **não** estiver definida, o bot continua atendendo (para a Ana não ficar muda),
+  mas registra um aviso bem visível no log e o `/health` mostra `"appSecret": false`.
+- Depois de configurar no Render, confira em `/health` se aparece `"appSecret": true`.
 
 ## 📚 Documentação Completa
 
@@ -62,6 +75,9 @@ Veja `RENDER_DEPLOY.md` para instruções passo-a-passo de deploy.
 - Nunca coloque credenciais no código
 - Use variáveis de ambiente
 - `.env` está no `.gitignore`
+- Defina `APP_SECRET` para que o `/webhook` só aceite chamadas assinadas pela Meta
+- A Ana não avalia chances de êxito nem sugere resultado ao cliente (Provimento 205/2021 da OAB):
+  a avaliação preliminar dos documentos segue apenas no resumo interno enviado ao advogado
 
 ## 📞 Suporte
 
