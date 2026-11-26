@@ -19,6 +19,9 @@ services:
         sync: false
       - key: PHONE_NUMBER_ID
         sync: false
+      # Chave secreta do app na Meta: valida a assinatura (X-Hub-Signature-256) do /webhook
+      - key: APP_SECRET
+        sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: GMAIL_USER

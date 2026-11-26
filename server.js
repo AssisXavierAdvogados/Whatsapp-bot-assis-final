@@ -4,13 +4,16 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
+const crypto = require('crypto');
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// Guarda o corpo BRUTO da requisicao: a assinatura da Meta (X-Hub-Signature-256)
+// e calculada sobre os bytes exatos recebidos, nao sobre o JSON ja interpretado.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const HISTORY_FILE = path.join('/tmp', 'conversation_history.json');
@@ -286,6 +289,9 @@ const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'assis-xavier-verify-token';
+// Chave secreta do aplicativo na Meta (Configuracoes do app > Basico > Chave secreta).
+// Usada para conferir que cada chamada ao /webhook veio mesmo da Meta.
+const APP_SECRET = (process.env.APP_SECRET || '').trim();
 const ESCRITORIO_PHONE = process.env.ESCRITORIO_PHONE || '+55 (44)99977-8551';
 const EMAIL_FROM = process.env.GMAIL_USER; // remetente (email verificado no Brevo)
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
@@ -516,9 +522,15 @@ IMPORTANTE — ÁUDIOS:
 - Se a transcrição vier confusa ou incompleta, confirme com o cliente, de forma natural, o ponto que ficou em dúvida.
 
 IMPORTANTE — ANÁLISE DE DOCUMENTOS:
-- Quando receber uma mensagem com "[ANALISE DO DOCUMENTO]", use o resultado para informar o cliente de forma simples.
-- Foque na conclusão: a pessoa tem chances ou não tem?
-- Depois de informar, continue o fluxo: confirme o nome e pergunte o horário.
+- Quando receber uma mensagem com "[DOCUMENTO RECEBIDO]", ela traz apenas um resumo neutro do documento que o cliente enviou.
+- Responda ao cliente em três passos: (1) confirme que recebeu e leu o documento; (2) explique em linguagem simples do que se trata; (3) diga que o advogado especialista vai avaliar o caso.
+- NUNCA diga nem sugira se o cliente tem ou não chances, direito, razão ou "bom caso". Essa avaliação é exclusiva do advogado.
+- Depois, continue o fluxo: confirme o nome e pergunte o horário.
+
+IMPORTANTE — NUNCA PROMETER RESULTADO (Provimento 205/2021 da OAB):
+- Em NENHUM momento da conversa (com ou sem documento) avalie chances de êxito, probabilidade de ganhar, valores que o cliente pode receber ou prazo para resolver.
+- Não use expressões como "você tem boas chances", "é causa ganha", "com certeza tem direito", "dá para ganhar", nem o contrário ("não vale a pena", "não tem chance").
+- Se o cliente perguntar "eu tenho chance?" ou "vou ganhar?", responda com acolhimento que só o advogado especialista pode avaliar isso depois de analisar o caso, e siga o fluxo para encaminhá-lo.
 
 IMPORTANTE — FERRAMENTAS:
 - Use notificar_especialista quando tiver: nome do cliente, situação clara e horário preferido (EXCETO casos trabalhistas).
@@ -548,6 +560,9 @@ HONORÁRIOS ADVOCATÍCIOS — COMO RESPONDER SE O CLIENTE PERGUNTAR:
 - Nunca dê valores além do que está descrito acima.
 `;
 
+const DOC_CLIENT_MARKER = '[RESUMO PARA O CLIENTE]';
+const DOC_INTERNAL_MARKER = '[AVALIACAO INTERNA]';
+
 const DOCUMENT_ANALYSIS_PROMPT = `Você é um assistente jurídico especializado do escritório Assis e Xavier Advogados.
 Analise o documento recebido com base no seu conhecimento jurídico amplo — legislação brasileira, jurisprudência, doutrina.
 
@@ -557,14 +572,46 @@ SUA ANÁLISE DEVE:
 1. Identificar o tipo de documento.
 2. Com base no contexto da conversa, verificar os elementos jurídicos relevantes para o caso.
 3. Identificar cláusulas, condições ou ausências que possam favorecer ou prejudicar o cliente.
-4. Avaliar as chances de êxito numa eventual ação.
+4. Avaliar a viabilidade de uma eventual ação — SOMENTE na seção interna, que vai apenas para o advogado.
 
-SUA RESPOSTA DEVE CONTER APENAS:
+SUA RESPOSTA DEVE TER EXATAMENTE DUAS SEÇÕES, com estes marcadores, nesta ordem:
+
+${DOC_CLIENT_MARKER}
 - Tipo do documento identificado.
-- Principais pontos relevantes (no máximo 3, objetivamente).
-- Avaliação das chances de êxito: ALTA, MODERADA ou BAIXA — com uma frase de motivo.
+- Do que se trata, em 2 ou 3 frases simples e neutras (quem são as partes, qual o assunto, datas ou valores principais).
+- Esta seção será usada no atendimento ao cliente. É PROIBIDO nela: avaliar chances de êxito, dizer se o cliente tem ou não direito ou razão, apontar pontos favoráveis ou desfavoráveis, sugerir resultado, valores a receber ou estratégia (Provimento 205/2021 da OAB).
+
+${DOC_INTERNAL_MARKER}
+- Principais pontos juridicamente relevantes (no máximo 3, objetivamente), favoráveis ou desfavoráveis ao cliente.
+- Avaliação preliminar de viabilidade: ALTA, MODERADA ou BAIXA — com uma frase de motivo.
+- Esta seção é confidencial: vai somente para o advogado especialista e nunca é mostrada ao cliente.
 
 NÃO use juridiquês excessivo. Responda em português correto, com acentuação e pontuação, de forma clara e direta.`;
+
+// Separa a analise do documento em: resumo neutro (vai para a conversa com o
+// cliente) e avaliacao interna (vai SOMENTE para o advogado). Se o modelo nao
+// respeitar o formato, falha para o lado seguro: nada da analise chega ao cliente.
+function splitDocumentAnalysis(text) {
+  const raw = String(text || '');
+  const iClient = raw.indexOf(DOC_CLIENT_MARKER);
+  const iInternal = raw.indexOf(DOC_INTERNAL_MARKER);
+  if (iClient === -1 || iInternal === -1 || iInternal < iClient) {
+    return { clientSummary: null, internalAssessment: raw.trim() };
+  }
+  return {
+    clientSummary: raw.slice(iClient + DOC_CLIENT_MARKER.length, iInternal).trim() || null,
+    internalAssessment: raw.slice(iInternal + DOC_INTERNAL_MARKER.length).trim()
+  };
+}
+
+// Junta as avaliacoes internas dos documentos pendentes do cliente, para o
+// resumo enviado ao advogado. Nunca entra no historico da conversa com o cliente.
+function internalAssessmentText(clientPhone) {
+  return (clientDocuments[clientPhone] || [])
+    .filter(d => d.avaliacaoInterna)
+    .map(d => `• ${d.filename}:\n${d.avaliacaoInterna}`)
+    .join('\n\n');
+}
 
 const TOOLS = [
   {
@@ -737,12 +784,19 @@ async function executeTool(toolName, toolInput, clientPhone) {
       handled: false
     });
 
+    // Avaliacao preliminar dos documentos: uso interno, so aparece para o advogado.
+    const avaliacaoInterna = internalAssessmentText(clientPhone);
+    const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
     const whatsappMsg =
       `🔔 *NOVO ATENDIMENTO - ${areaLabel}*\n\n` +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `📱 *WhatsApp:* +${clientPhone}\n` +
       `⏰ *Melhor horário:* ${horario_preferido}\n\n` +
       `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
+      (avaliacaoInterna
+        ? `🔒 *AVALIAÇÃO PRELIMINAR DOS DOCUMENTOS (uso interno — não foi informada ao cliente):*\n${avaliacaoInterna}\n\n`
+        : '') +
       `_Atendimento realizado pela Ana - Assis e Xavier Advogados_`;
 
     const emailHtml =
@@ -755,6 +809,11 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `</table>` +
       `<h3 style="color:#1a5276;margin-top:20px">Resumo do Caso</h3>` +
       `<p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #1a5276">${resumo_caso}</p>` +
+      (avaliacaoInterna
+        ? `<h3 style="color:#7d6608;margin-top:20px">Avaliação preliminar dos documentos (uso interno)</h3>` +
+          `<p style="white-space:pre-wrap;background:#fef9e7;padding:12px;border-left:4px solid #b7950b">${escHtml(avaliacaoInterna)}</p>` +
+          `<small style="color:#888">Gerada automaticamente pela IA. Não foi informada ao cliente e não substitui a análise do advogado.</small>`
+        : '') +
       `<hr style="margin-top:24px">` +
       `<small style="color:#888">Atendimento realizado pela Ana - Assis e Xavier Advogados</small>` +
       `</div>`;
@@ -765,7 +824,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       nome_cliente,
       `+${clientPhone}`,
       horario_preferido,
-      resumo_caso
+      avaliacaoInterna ? `${resumo_caso} | AVALIACAO INTERNA (nao informada ao cliente): ${avaliacaoInterna}` : resumo_caso
     ]);
 
     // 2) Texto livre — SEMPRE tenta (nao so quando o template falha). Se o template
@@ -931,6 +990,9 @@ async function executeTool(toolName, toolInput, clientPhone) {
     const specialist = SPECIALISTS.trabalhista;
     const code = genTriageCode();
 
+    await ensureStateLoaded(clientPhone);
+    const avaliacaoTriagem = internalAssessmentText(clientPhone);
+
     const triageText =
       `⚖️ *TRIAGEM - PRECISO DA SUA DECISAO*  [${code}]\n\n` +
       `*O escritorio deve ASSUMIR este caso trabalhista?*\n` +
@@ -939,6 +1001,9 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `💰 *Salario:* ${salario}\n` +
       `🕐 *Tempo:* ${tempo_trabalho}\n\n` +
       `📋 ${resumo_caso}\n\n` +
+      (avaliacaoTriagem
+        ? `🔒 *Avaliação preliminar dos documentos (uso interno — não informada ao cliente):*\n${avaliacaoTriagem}\n\n`
+        : '') +
       `_(pode responder so SIM ou NAO tambem)_`;
 
     // 1) Template aprovado (chega mesmo fora da janela de 24h). Como o texto fixo
@@ -2345,7 +2410,8 @@ async function handleDocument(message, userId) {
     // (Render free tier derruba a instancia por inatividade), o array em memoria teria
     // sido zerado e o arquivo anterior seria perdido silenciosamente.
     await ensureStateLoaded(userId);
-    clientDocuments[userId].push({ filename, mimeType, mediaId, base64: buffer.toString('base64') });
+    const docEntry = { filename, mimeType, mediaId, base64: buffer.toString('base64') };
+    clientDocuments[userId].push(docEntry);
     if (clientDocuments[userId].length > 5) clientDocuments[userId].shift();
     console.log(`[Doc] ${filename} salvo para ${userId}. Total de documentos pendentes: ${clientDocuments[userId].length}`);
     supabasePatch(userId, { meta: { ...(conversationMeta[userId] || {}), documents: clientDocuments[userId] } });
@@ -2362,7 +2428,21 @@ async function handleDocument(message, userId) {
       return callClaudeAPI('O cliente enviou um documento, mas não consegui processá-lo. Peça para enviar em PDF ou como foto nítida.', userId);
     }
 
-    return callClaudeAPI(`[ANALISE DO DOCUMENTO - ${filename}]\n${analysisResult}`, userId);
+    // A avaliacao de viabilidade fica guardada junto do documento e segue SOMENTE
+    // no resumo interno ao advogado. Para a conversa com o cliente vai apenas o
+    // resumo neutro (Provimento 205/2021 da OAB: nao sugerir resultado).
+    const { clientSummary, internalAssessment } = splitDocumentAnalysis(analysisResult);
+    if (internalAssessment) {
+      docEntry.avaliacaoInterna = internalAssessment;
+      supabasePatch(userId, { meta: { ...(conversationMeta[userId] || {}), documents: clientDocuments[userId] } });
+    }
+
+    return callClaudeAPI(
+      `[DOCUMENTO RECEBIDO - ${filename}]\n` +
+      `${clientSummary || 'O documento foi recebido e lido, mas não há resumo disponível.'}\n\n` +
+      `(Instrução interna: confirme ao cliente que leu o documento, explique em linguagem simples do que se trata e diga que o advogado especialista vai avaliar o caso. Não avalie chances nem sugira resultado.)`,
+      userId
+    );
   } catch (error) {
     console.error('[Doc] Erro ao processar documento:', error.response?.data || error.message);
     return callClaudeAPI('O cliente enviou um documento, mas ocorreu um erro técnico. Peça para tentar novamente.', userId);
@@ -2475,7 +2555,50 @@ app.get('/webhook', (req, res) => {
   res.sendStatus(403);
 });
 
-app.post('/webhook', async (req, res) => {
+function warnAppSecretMissing() {
+  console.warn(
+    '\n' +
+    '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n' +
+    '!! [SEGURANCA] APP_SECRET NAO DEFINIDA.                                     !!\n' +
+    '!! O /webhook esta aceitando chamadas SEM validar a assinatura da Meta:     !!\n' +
+    '!! qualquer pessoa que descubra a URL pode simular mensagens de clientes.   !!\n' +
+    '!! Defina APP_SECRET no painel do Render (Meta > app > Configuracoes >      !!\n' +
+    '!! Basico > Chave secreta do aplicativo).                                   !!\n' +
+    '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n'
+  );
+}
+
+// Confere o header X-Hub-Signature-256 ("sha256=<hex>") contra o HMAC-SHA256 do
+// corpo bruto calculado com a APP_SECRET. Comparacao em tempo constante.
+function isValidMetaSignature(req) {
+  const header = req.get('x-hub-signature-256') || '';
+  if (!header.startsWith('sha256=') || !Buffer.isBuffer(req.rawBody)) return false;
+  const expected = crypto.createHmac('sha256', APP_SECRET).update(req.rawBody).digest();
+  const received = Buffer.from(header.slice('sha256='.length), 'hex');
+  // timingSafeEqual lanca erro se os tamanhos diferirem (hex invalido ou truncado).
+  if (received.length !== expected.length) return false;
+  return crypto.timingSafeEqual(received, expected);
+}
+
+let appSecretWarnedOnWebhook = false;
+function verifyMetaSignature(req, res, next) {
+  if (!APP_SECRET) {
+    // Sem a chave nao ha como validar. NAO bloqueia, para a Ana nao ficar muda
+    // enquanto a variavel nao e configurada no Render — mas avisa bem alto.
+    if (!appSecretWarnedOnWebhook) {
+      appSecretWarnedOnWebhook = true;
+      warnAppSecretMissing();
+    }
+    return next();
+  }
+  if (!isValidMetaSignature(req)) {
+    console.warn(`[Webhook] Assinatura invalida ou ausente (IP ${req.ip}). Requisicao recusada com 401.`);
+    return res.sendStatus(401);
+  }
+  next();
+}
+
+app.post('/webhook', verifyMetaSignature, async (req, res) => {
   res.sendStatus(200);
 
   try {
@@ -2987,6 +3110,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Chatbot esta funcionando!',
+    // false = o /webhook NAO esta validando a assinatura da Meta (defina APP_SECRET no Render)
+    appSecret: !!APP_SECRET,
     api: 'Meta WhatsApp Cloud API',
     features: ['texto com debounce 8s', 'audio (transcricao Whisper)', 'PDF', 'imagens', 'analise juridica', 'notificacao de especialistas', 'lembrete automatico', 'email de especialistas'],
     specialists: Object.entries(SPECIALISTS).map(([area, s]) => ({ area, name: s.name })),
@@ -3000,6 +3125,7 @@ app.get('/health', (req, res) => {
       TEMPLATE_LANG: TEMPLATE_LANG,
       SUPABASE: supabaseEnabled() ? 'conectado' : 'NAO DEFINIDO',
       TRANSCRIBE_API_KEY: TRANSCRIBE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
+      APP_SECRET: APP_SECRET ? '*** (definido)' : 'NAO DEFINIDO (webhook sem validacao de assinatura)',
       VERIFY_TOKEN: VERIFY_TOKEN
     }
   });
@@ -3688,6 +3814,8 @@ ${cards || '<div class="card">Nenhum cliente registrado no servidor neste period
 
 
 app.listen(PORT, () => {
+  if (!APP_SECRET) warnAppSecretMissing();
+  else console.log('[Seguranca] Validacao de assinatura da Meta ATIVA no /webhook.');
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
   console.log(`Webhook: GET|POST /webhook`);
