@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
+const origemLib = require('./origem');
 const crypto = require('crypto');
 const voiceLib = require('./voice');
 const painelAudio = require('./painel-audio');
@@ -496,6 +497,7 @@ URGÊNCIA
 - Nesses casos, chame a ferramenta de encaminhamento imediatamente com urgencia = true e o motivo_urgencia. No máximo uma pergunta antes; o que faltar vai como "não informado", e o horário como "o quanto antes".
 - Diga ao cliente algo realista: "Vou avisar o Dr. Willian agora mesmo." Não prometa em quantos minutos ele liga.
 - Ansiedade ou pressa comuns não são urgência. Marque só nas situações acima.
+- Quando o sistema informar "URGÊNCIA EM CURSO" (prisão acontecendo agora, flagrante, oficial na porta, mandado sendo cumprido), o Dr. Willian e a Dra. Aline já receberam um aviso imediato: diga isso ao cliente, tranquilize e faça o encaminhamento com urgencia = true na mesma resposta.
 
 EMERGÊNCIA (RISCO À VIDA OU VIOLÊNCIA)
 - Se alguém estiver em perigo agora, a primeira coisa é orientar a ligar 190 (Polícia Militar). Em violência contra a mulher, também o 180 (Central de Atendimento à Mulher).
@@ -563,10 +565,11 @@ IMPORTANTE — CASOS TRABALHISTAS (REGRA ESPECIAL):
 - Previdenciário: aposentadoria, benefícios do INSS, pensão por morte, auxílio-doença, invalidez -> Dra. Aline Xavier
 - Cível/Bancário/Consumidor: dívidas, cobranças, financiamentos, apreensão de veículo -> Dr. Willian Assis
 
-HONORÁRIOS ADVOCATÍCIOS — COMO RESPONDER SE O CLIENTE PERGUNTAR:
-- Se for caso de Direito do Consumidor (dano moral, dano material, cobranças abusivas, contratos de consumo): informe que o contrato é de 30% do valor que o cliente vier a receber, seja de dano moral ou dano material. Não se cobra nada adiantado.
-- Se for qualquer outro caso (usucapião, reintegração de posse, criminal, trabalhista, tributário, família, previdenciário etc.): diga que os honorários dependem da análise do caso e que o especialista vai passar o valor após a consulta. Não invente valores.
-- Nunca dê valores além do que está descrito acima.
+HONORÁRIOS ADVOCATÍCIOS — COMO RESPONDER SE O CLIENTE PERGUNTAR (vale para QUALQUER área, inclusive Direito do Consumidor):
+- Os honorários dependem da análise do caso; o especialista informa o valor após a consulta. Não invente valores, percentuais nem condições de pagamento.
+- É PROIBIDO dizer "30%", "trinta por cento", "nada adiantado", "não se cobra nada agora", "sem entrada", "só paga se ganhar", "quota litis", tabela de preços ou qualquer valor de honorários (Provimento 205/2021 da OAB, art. 3º, I — vedada a captação de clientela com divulgação de honorários ou forma de pagamento).
+- Também não afirme o contrário (que se cobra antecipado ou que há entrada): simplesmente não fale de preço.
+- Se o cliente insistir num número, responda com acolhimento que só o advogado pode falar de honorários depois de analisar o caso, e siga o encaminhamento.
 `;
 
 const DOC_CLIENT_MARKER = '[RESUMO PARA O CLIENTE]';
@@ -760,11 +763,22 @@ function returningClientContext(userId, agora = Date.now()) {
     `\n[FIM DOS DADOS DO SISTEMA]`;
 }
 
+// Blocos de origem do cliente e de urgencia em curso (dados do meta da conversa).
+function blocosOrigemEUrgencia(userId) {
+  const meta = conversationMeta[userId] || {};
+  const alerta = meta.alertaUrgencia;
+  // O bloco de urgencia vale enquanto o aviso imediato e recente e o
+  // encaminhamento formal ainda nao aconteceu depois dele.
+  const emCurso = origemLib.alertaRecente(meta, Date.now(), URGENCIA_ALERTA_HORAS) &&
+    !(meta.notificacao && meta.notificacao.em > alerta.em) && !(meta.triagemEm && meta.triagemEm > alerta.em);
+  return origemLib.blocoOrigemPrompt(meta, { urgenciaEmCurso: emCurso }) + (emCurso ? origemLib.blocoUrgenciaPrompt() : '');
+}
+
 function buildSystemPrompt(userId, retornoCtx = '') {
   const history = conversationHistory[userId] || [];
   const textMessages = history.filter(m => typeof m.content === 'string' && m.content.trim());
 
-  if (textMessages.length === 0) return OFFICE_CONTEXT + blocoAgora();
+  if (textMessages.length === 0) return OFFICE_CONTEXT + blocoAgora() + blocosOrigemEUrgencia(userId);
 
   const recentLines = textMessages
     .slice(-8)
@@ -777,7 +791,7 @@ function buildSystemPrompt(userId, retornoCtx = '') {
     : `\n\nATENÇÃO CRÍTICA — CONVERSA EM ANDAMENTO:\n` +
       `Você JÁ está atendendo este cliente. NÃO se apresente. Retome exatamente de onde parou.`;
 
-  return OFFICE_CONTEXT + blocoAgora() + retornoCtx + andamento +
+  return OFFICE_CONTEXT + blocoAgora() + blocosOrigemEUrgencia(userId) + retornoCtx + andamento +
     `\n\nÚLTIMAS MENSAGENS DA CONVERSA:\n${recentLines}`;
 }
 
@@ -849,13 +863,18 @@ async function executeTool(toolName, toolInput, clientPhone) {
     await ensureStateLoaded(clientPhone);
 
     // Guarda metadados para exibir no painel (nome, area, especialista, horario)
+    // Com spread: preserva o que ja estava no meta (origem, alertaUrgencia etc.).
+    const metaAnterior = { ...(conversationMeta[clientPhone] || {}) };
+    delete metaAnterior.urgencia; // a urgencia vale para ESTE encaminhamento
     conversationMeta[clientPhone] = {
+      ...metaAnterior,
       nome: nome_cliente,
       area: areaLabel,
       especialista: specialist.name,
       horario: horario_preferido,
       ...(urgente ? { urgencia: motivoUrgencia } : {})
     };
+    const origemTxt = origemLib.descreverOrigem(conversationMeta[clientPhone].origem);
     supabasePatch(clientPhone, {
       meta: { ...conversationMeta[clientPhone], documents: clientDocuments[clientPhone] || [] },
       handled: false
@@ -871,8 +890,9 @@ async function executeTool(toolName, toolInput, clientPhone) {
         : `🔔 *NOVO ATENDIMENTO - ${areaLabel}*\n\n`) +
       `👤 *Cliente:* ${nome_cliente}\n` +
       `📱 *WhatsApp:* +${clientPhone}\n` +
-      `⏰ *Melhor horário:* ${horario_preferido}\n\n` +
-      `📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
+      `⏰ *Melhor horário:* ${horario_preferido}\n` +
+      (origemTxt ? `🏷️ *Origem:* ${origemTxt}\n` : '') +
+      `\n📋 *RESUMO DO CASO:*\n${resumo_caso}\n\n` +
       (avaliacaoInterna
         ? `🔒 *AVALIAÇÃO PRELIMINAR DOS DOCUMENTOS (uso interno — não foi informada ao cliente):*\n${avaliacaoInterna}\n\n`
         : '') +
@@ -888,6 +908,7 @@ async function executeTool(toolName, toolInput, clientPhone) {
       `<tr><td style="padding:8px;font-weight:bold;width:140px">Cliente:</td><td style="padding:8px">${nome_cliente}</td></tr>` +
       `<tr style="background:#f2f2f2"><td style="padding:8px;font-weight:bold">WhatsApp:</td><td style="padding:8px">+${clientPhone}</td></tr>` +
       `<tr><td style="padding:8px;font-weight:bold">Melhor horário:</td><td style="padding:8px">${horario_preferido}</td></tr>` +
+      (origemTxt ? `<tr style="background:#f2f2f2"><td style="padding:8px;font-weight:bold">Origem:</td><td style="padding:8px">${origemTxt}</td></tr>` : '') +
       `</table>` +
       `<h3 style="color:#1a5276;margin-top:20px">Resumo do Caso</h3>` +
       `<p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #1a5276">${resumo_caso}</p>` +
@@ -2154,16 +2175,18 @@ async function checarAtendimentosSemEncaminhamento() {
     const nome = info && info.nome ? info.nome : 'nao informado';
     const resumo = info && info.resumo ? info.resumo : transcricao.slice(0, 600);
     const quando = fmtDataHora(new Date(a.ultimoTs).toISOString());
+    const origemAviso = origemLib.descreverOrigem((row.meta || {}).origem);
 
     const texto =
       `⚠️ *ATENDIMENTO SEM ENCAMINHAMENTO - ${areaLabel}*\n\n` +
-      `👤 *Cliente:* ${nome}\n📱 *WhatsApp:* +${row.phone}\n🕐 *Ultima mensagem:* ${quando}\n\n` +
+      `👤 *Cliente:* ${nome}\n📱 *WhatsApp:* +${row.phone}\n🕐 *Ultima mensagem:* ${quando}\n` +
+      (origemAviso ? `🏷️ *Origem:* ${origemAviso}\n` : '') + `\n` +
       `📋 *Resumo:* ${resumo}\n\n` +
       `_A conversa parou sem que o caso fosse passado ao especialista. Vale entrar em contato com o cliente._`;
     const html =
       `<div style="font-family:Arial,sans-serif;max-width:640px">` +
       `<h2 style="color:#b9770e">Atendimento sem encaminhamento - ${areaLabel}</h2>` +
-      `<p><b>Cliente:</b> ${nome}<br><b>WhatsApp:</b> +${row.phone}<br><b>Ultima mensagem:</b> ${quando}</p>` +
+      `<p><b>Cliente:</b> ${nome}<br><b>WhatsApp:</b> +${row.phone}<br><b>Ultima mensagem:</b> ${quando}${origemAviso ? `<br><b>Origem:</b> ${origemAviso}` : ''}</p>` +
       `<p><b>Resumo:</b> ${resumo}</p>` +
       `<h3>Conversa</h3><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;background:#f6f6f6;padding:12px">${transcricao.replace(/</g, '&lt;')}</pre>` +
       `<small style="color:#888">Aviso automatico da Ana: a conversa parou ha mais de ${REDE_MINUTOS_PARADO} minutos sem encaminhamento.</small></div>`;
@@ -2368,6 +2391,11 @@ async function callClaudeAPIInternal(userMessage, userId, opts = {}) {
       if (!toolUseBlocks.length) {
         const assistantText = extractText(content);
         conversationHistory[userId].push({ role: 'assistant', content: assistantText, ts: new Date().toISOString() });
+        // A Ana perguntou como a pessoa conheceu o escritorio? Entao nao pergunta de novo.
+        const metaAtual = conversationMeta[userId] || {};
+        if (!metaAtual.origem && !metaAtual.origemPerguntada && origemLib.isPerguntaOrigem(assistantText)) {
+          conversationMeta[userId] = { ...metaAtual, origemPerguntada: true };
+        }
         break;
       }
 
@@ -2700,6 +2728,91 @@ async function sendWhatsAppMessage(to, message) {
 }
 
 // ---------------------------------------------------------------------------
+// ORIGEM DO CLIENTE E URGENCIA EM CURSO (ver origem.js)
+// ---------------------------------------------------------------------------
+
+// Janela de deduplicacao do aviso imediato (opcional; padrao 6 horas)
+const URGENCIA_ALERTA_HORAS = origemLib.janelaAlertaHoras(process.env);
+
+// Aviso imediato ao Dr. Willian e a Dra. Aline. Mesmo canal dos outros avisos
+// a equipe: template + texto livre + e-mail. O contato da Dra. Aline e o que
+// ja esta no roteamento de especialistas. Devolve os canais que aceitaram.
+async function enviarAlertaUrgencia(userId, trecho, motivo) {
+  const meta = conversationMeta[userId] || {};
+  const destinos = origemLib.dedupeDestinos([
+    { phone: ADMIN_PHONE, email: ADMIN_EMAIL },
+    { phone: SPECIALISTS.familia.phone, email: SPECIALISTS.familia.email }
+  ]);
+  const aviso = origemLib.montarAlertaUrgencia({ nome: meta.nome, phone: userId, origem: meta.origem, trecho, motivo });
+  const canais = { template: false, texto: false, email: false };
+  for (const d of destinos) {
+    try {
+      if (await sendWhatsAppTemplate(d.phone, [`${aviso.titulo}: ${motivo}`, aviso.cliente, `+${userId}`, 'AGORA', aviso.resumo])) canais.template = true;
+    } catch (e) { console.error(`[Urgencia] Template para +${d.phone} falhou:`, e.message); }
+    try {
+      if (await sendWhatsAppMessage(d.phone, aviso.texto)) canais.texto = true;
+    } catch (e) { console.error(`[Urgencia] Texto para +${d.phone} falhou:`, e.message); }
+    try {
+      if (await sendEmailToSpecialist(d.email, aviso.assunto, aviso.html)) canais.email = true;
+    } catch (e) { console.error(`[Urgencia] E-mail para ${d.email} falhou:`, e.message); }
+  }
+  if (!canais.template && !canais.texto && !canais.email) {
+    console.error(`[Urgencia] NENHUMA via confirmou o aviso imediato de +${userId} (${motivo}).`);
+  } else {
+    console.warn(`[Urgencia] Aviso imediato de +${userId} (${motivo}): template=${canais.template} texto=${canais.texto} email=${canais.email}`);
+  }
+  return { canais, para: destinos.map(d => d.email) };
+}
+
+// Le um lote de mensagens do CLIENTE antes de chamar o Claude:
+//   - grava a origem (codigo do link wa.me ou resposta da pessoa), sem sobrescrever;
+//   - se for urgencia EM CURSO, dispara o aviso imediato (no maximo 1 a cada janela).
+// O texto das mensagens nao e alterado. Nunca lanca erro: o atendimento segue.
+function registrarSinaisDoCliente(userId, messages) {
+  return enqueueForUser(userId, async () => {
+    if (findSpecialistByPhone(userId) || isInternalRow(userId)) return; // so cliente
+    await ensureStateLoaded(userId);
+    const lista = (Array.isArray(messages) ? messages : [messages]).filter(m => typeof m === 'string' && m.trim());
+    if (!lista.length) return;
+    let mudou = false;
+
+    // 1) origem
+    const metaAntes = conversationMeta[userId] || {};
+    const ultimaDaAna = [...conversationHistory[userId]].reverse().find(m => m.role === 'assistant' && typeof m.content === 'string');
+    const codigo = origemLib.origemDoLote(lista, metaAntes, ultimaDaAna && ultimaDaAna.content);
+    if (codigo) {
+      conversationMeta[userId] = origemLib.aplicarOrigem(metaAntes, codigo);
+      mudou = true;
+      console.log(`[Origem] +${userId}: ${origemLib.descreverOrigem(codigo)}`);
+    }
+
+    // 2) urgencia em curso
+    const texto = lista.join('\n');
+    const urg = origemLib.detectUrgenciaEmCurso(texto);
+    if (urg.urgente && !origemLib.alertaRecente(conversationMeta[userId], Date.now(), URGENCIA_ALERTA_HORAS)) {
+      // Grava ANTES de enviar: outra mensagem urgente em seguida nao repete o aviso.
+      const alerta = { em: new Date().toISOString(), motivo: urg.motivo, canais: null, para: [] };
+      conversationMeta[userId] = { ...(conversationMeta[userId] || {}), alertaUrgencia: alerta };
+      mudou = true;
+      // Em segundo plano: a resposta da Ana ao cliente nao espera o aviso.
+      enviarAlertaUrgencia(userId, texto, urg.motivo)
+        .then((r) => {
+          const atual = conversationMeta[userId] || {};
+          if (atual.alertaUrgencia && atual.alertaUrgencia.em === alerta.em) {
+            conversationMeta[userId] = { ...atual, alertaUrgencia: { ...atual.alertaUrgencia, canais: r.canais, para: r.para } };
+            persist(userId);
+          }
+        })
+        .catch((e) => console.error(`[Urgencia] Falha ao enviar o aviso imediato de +${userId}:`, e && e.message));
+    }
+
+    if (mudou) persist(userId);
+  }).catch((e) => {
+    console.error(`[Origem] Falha ao registrar origem/urgencia de +${userId}:`, e && e.message);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // RECADO DE VOZ (so no atendimento a cliente; ver voice.js)
 // Desligado por padrao: VOICE_REPLIES_ENABLED precisa ser true/1/yes.
 // ---------------------------------------------------------------------------
@@ -2928,6 +3041,8 @@ app.post('/webhook', verifyMetaSignature, async (req, res) => {
     }
 
     if (message.type === 'document' || message.type === 'image') {
+      // O texto que estava na fila tambem pode trazer codigo de origem ou urgencia.
+      if (pendingMessages[senderNumber]) await registrarSinaisDoCliente(senderNumber, pendingMessages[senderNumber].messages);
       if (pendingMessages[senderNumber]) {
         clearTimeout(pendingMessages[senderNumber].timer);
         const pending = pendingMessages[senderNumber];
@@ -3002,6 +3117,8 @@ function queueClientText(senderNumber, text) {
 
     const combined = batch.messages.join('\n');
     console.log(`[Batch] Processando ${batch.messages.length} mensagem(ns) de ${senderNumber} (${Date.now() - batch.firstAt} ms apos a primeira)`);
+    // Origem do cliente e aviso imediato de urgencia em curso, antes do Claude.
+    await registrarSinaisDoCliente(senderNumber, batch.messages);
 
     try {
       // parts: quais trechos do lote foram audio (so para o painel; null se nenhum)
@@ -3067,6 +3184,7 @@ button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:
 .bdg{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px;background:#0e3a2f;color:#4fd3a8}
 .bdg.area{background:#10334d;color:#5cb3f0}
 .bdg.ok{background:#2a3942;color:var(--mut)}
+.bdg.origem{background:transparent;border:1px solid var(--line);color:var(--txt)}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex-shrink:0}
 .empty{padding:60px 24px;text-align:center;color:var(--mut);font-size:14px}
 /* CHAT */
@@ -3113,6 +3231,7 @@ button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:
       <div class="tab" data-f="open" onclick="setTab('open')">A tratar <span class="n" id="n-open"></span></div>
       <div class="tab" data-f="done" onclick="setTab('done')">Tratadas <span class="n" id="n-done"></span></div>
     </div>
+    <div id="origens" title="Origem dos atendimentos" style="font-size:11.5px;color:var(--mut);text-align:center"></div>
   </div>
   <div class="list" id="lst"></div>
 </div>
@@ -3162,6 +3281,17 @@ function fmtDay(ts){if(!ts)return '';const d=new Date(ts),h=new Date(),y=new Dat
   if(d.toDateString()===y.toDateString())return 'Ontem';
   return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'});}
 
+// Origem do atendimento (meta.origem): rotulo curto e contagem
+const ORIGENS=${JSON.stringify(origemLib.ROTULOS)};
+function origemLbl(c){const o=c.meta&&c.meta.origem;return o?(ORIGENS[o]||ORIGENS.OUTRO):'';}
+function origemCounts(){
+  const n={};let sem=0;
+  for(const k in convs){const l=origemLbl(convs[k]);if(l)n[l]=(n[l]||0)+1;else sem++;}
+  const partes=Object.keys(ORIGENS).map(k=>ORIGENS[k]).filter(l=>n[l]||l!==ORIGENS.OUTRO).map(l=>l+' '+(n[l]||0));
+  partes.push('Sem origem '+sem);
+  document.getElementById('origens').textContent=partes.join(' · ');
+}
+
 async function auth(){
   const p=document.getElementById('pwd').value;
   const r=await fetch('/admin/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
@@ -3184,7 +3314,7 @@ function counts(){let all=0,open=0,done=0;for(const k in convs){all++;convs[k].h
   document.getElementById('n-all').textContent=all;document.getElementById('n-open').textContent=open;document.getElementById('n-done').textContent=done;
   document.getElementById('subt').textContent=all+' conversa'+(all!==1?'s':'');}
 function render(){
-  counts();
+  counts();origemCounts();
   const q=(document.getElementById('q').value||'').toLowerCase();
   const el=document.getElementById('lst');
   let keys=Object.keys(convs).sort((a,b)=>new Date(convs[b].updated_at||0)-new Date(convs[a].updated_at||0));
@@ -3192,7 +3322,7 @@ function render(){
     const c=convs[ph];
     if(filter==='open'&&c.handled)return false;
     if(filter==='done'&&!c.handled)return false;
-    if(q){const hay=(ph+' '+nm(c)+' '+(c.meta&&c.meta.area||'')).toLowerCase();if(!hay.includes(q))return false;}
+    if(q){const hay=(ph+' '+nm(c)+' '+(c.meta&&c.meta.area||'')+' '+origemLbl(c)+' '+(c.meta&&c.meta.origem||'')).toLowerCase();if(!hay.includes(q))return false;}
     return true;
   });
   if(!keys.length){el.innerHTML='<div class="empty">Nenhuma conversa encontrada.</div>';return;}
@@ -3202,12 +3332,13 @@ function render(){
     const area=c.meta&&c.meta.area?\`<span class="bdg area">\${esc(c.meta.area)}</span>\`:'';
     const esp=c.meta&&c.meta.especialista?\`<span class="bdg">\${esc(c.meta.especialista)}</span>\`:'';
     const done=c.handled?'<span class="bdg ok">✓ tratada</span>':'';
+    const orig=origemLbl(c)?'<span class="bdg origem">'+esc(origemLbl(c))+'</span>':'';
     return \`<div class="item" onclick="openChat('\${ph}')">
       <div class="av" style="background:\${color(ph)}">\${esc(initials(c)).toUpperCase()}</div>
       <div class="ci">
         <div class="crow"><div class="cp">\${esc(nm(c))}</div><div class="ctime">\${fmtDay(c.updated_at)}</div></div>
         <div class="cv">\${prev}</div>
-        <div class="badges">\${area}\${esp}\${done}\${!c.handled?'<span class="dot"></span>':''}</div>
+        <div class="badges">\${area}\${esp}\${orig}\${done}\${!c.handled?'<span class="dot"></span>':''}</div>
       </div>
     </div>\`;
   }).join('');
@@ -3221,7 +3352,8 @@ function openChat(ph){
   if(c.meta){bar.style.display='flex';bar.innerHTML=
     (c.meta.area?\`<b>\${esc(c.meta.area)}</b>\`:'')+
     (c.meta.especialista?\`· \${esc(c.meta.especialista)}\`:'')+
-    (c.meta.horario?\`· ⏰ \${esc(c.meta.horario)}\`:'');}
+    (c.meta.horario?\`· ⏰ \${esc(c.meta.horario)}\`:'')+
+    (origemLbl(c)?'· 🏷️ '+esc(origemLbl(c)):'');}
   else bar.style.display='none';
   const el=document.getElementById('cmsgs');let lastDay='';
   el.innerHTML=ms.map(m=>{

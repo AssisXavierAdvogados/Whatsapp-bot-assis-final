@@ -19,6 +19,28 @@ const RESPOSTA_LONGA = 'Esta frase se repete para a resposta passar do limite de
 
 function route(method, url, body) {
   if (url.includes('api.anthropic.com')) {
+    // Fase 5 (origem/urgencia/honorarios): o que entrou no system prompt, e um
+    // roteiro simples de ferramenta para testar o encaminhamento formal.
+    {
+      const sys = String(body.system || '');
+      const fim = body.messages[body.messages.length - 1];
+      const entradaTxt = typeof fim.content === 'string' ? fim.content : '';
+      if (sys.includes('Você é Ana, assistente virtual de atendimento')) {
+        ev({
+          t: 'claude_sistema', entrada: entradaTxt,
+          origem: (sys.match(/ORIGEM (DO CLIENTE|AINDA NÃO INFORMADA)[^\n]*/) || [''])[0],
+          urgencia: sys.includes('URGÊNCIA EM CURSO (dados do sistema)'),
+          honorarios: sys.slice(sys.indexOf('HONORÁRIOS ADVOCATÍCIOS'), sys.indexOf('AGORA (dados do sistema)'))
+        });
+        if (/USAR_FERRAMENTA/.test(entradaTxt)) {
+          return { data: { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tool-1', name: 'notificar_especialista',
+            input: { area: 'criminal', nome_cliente: 'Maria Teste', horario_preferido: 'o quanto antes', resumo_caso: 'Resumo de teste.', urgencia: true, motivo_urgencia: 'teste' } }] } };
+        }
+        if (/PERGUNTA_ORIGEM/.test(entradaTxt)) {
+          return { data: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Entendi. E como você conheceu o escritório?' }] } };
+        }
+      }
+    }
     const ultima = body.messages[body.messages.length - 1];
     const txt = typeof ultima.content === 'string' ? ultima.content : JSON.stringify(ultima.content);
     const cliente = String(body.system).includes('Você é Ana, assistente virtual de atendimento');
@@ -30,6 +52,10 @@ function route(method, url, body) {
     return { data: { content: [{ type: 'text', text: /LONGO/.test(txt) ? RESPOSTA_LONGA : RESPOSTA_CURTA }], stop_reason: 'end_turn' } };
   }
   if (url.includes('graph.facebook.com') && url.endsWith('/messages')) {
+    if (process.env.MOCK_FALHA_ALERTA && body.text && /ALERTA URGENTE/.test(body.text.body)) {
+      ev({ t: 'meta_falha_alerta', to: body.to });
+      throw new Error('falha simulada no envio do alerta');
+    }
     if (body.status === 'read') return { data: { success: true } };
     ev({ t: 'meta_texto', to: body.to, type: body.type, body: body.text && body.text.body });
     return { data: { messages: [{ id: 'wamid.txt' }] } };
