@@ -17,7 +17,33 @@ fs.writeFileSync = (p, ...r) => (p === HIST ? undefined : writeFileSync(p, ...r)
 const RESPOSTA_CURTA = 'Ouvi aqui, obrigada por explicar.\n\nA consulta custa R$ 250,00 e o telefone do escritório é +55 (44)99977-8551.';
 const RESPOSTA_LONGA = 'Esta frase se repete para a resposta passar do limite de voz. '.repeat(14).trim();
 
+// Supabase de mentira, em memoria (so e usado quando o teste define SUPABASE_URL).
+// MOCK_SUPABASE_SEED: JSON com as linhas iniciais da tabela "conversations".
+const supabase = JSON.parse(process.env.MOCK_SUPABASE_SEED || '[]');
+function supabaseRoute(method, url, body) {
+  const m = /[?&]phone=eq\.([^&]+)/.exec(url);
+  const phone = m ? decodeURIComponent(m[1]) : null;
+  if (method === 'get') {
+    const rows = phone ? supabase.filter(r => r.phone === phone) : supabase;
+    return { data: JSON.parse(JSON.stringify(rows)) };
+  }
+  if (method === 'post') {
+    const i = supabase.findIndex(r => r.phone === body.phone);
+    if (i === -1) supabase.push({ ...body }); else supabase[i] = { ...supabase[i], ...body };
+    ev({ t: 'supabase_upsert', phone: body.phone, meta: body.meta || null });
+    return { data: [] };
+  }
+  if (method === 'patch' && phone) {
+    const i = supabase.findIndex(r => r.phone === phone);
+    if (i !== -1) supabase[i] = { ...supabase[i], ...body };
+    ev({ t: 'supabase_patch', phone, meta: body.meta || null });
+    return { data: [] };
+  }
+  return { data: [] };
+}
+
 function route(method, url, body) {
+  if (url.includes('/rest/v1/conversations')) return supabaseRoute(method, url, body);
   if (url.includes('api.anthropic.com')) {
     // Fase 5 (origem/urgencia/honorarios): o que entrou no system prompt, e um
     // roteiro simples de ferramenta para testar o encaminhamento formal.
@@ -30,6 +56,7 @@ function route(method, url, body) {
           t: 'claude_sistema', entrada: entradaTxt,
           origem: (sys.match(/ORIGEM (DO CLIENTE|AINDA NÃO INFORMADA)[^\n]*/) || [''])[0],
           urgencia: sys.includes('URGÊNCIA EM CURSO (dados do sistema)'),
+          triagem: (sys.match(/TRIAGEM DE URGÊNCIA \(dados do sistema\)[^\n]*/) || [''])[0],
           honorarios: sys.slice(sys.indexOf('HONORÁRIOS ADVOCATÍCIOS'), sys.indexOf('AGORA (dados do sistema)'))
         });
         if (/USAR_FERRAMENTA/.test(entradaTxt)) {

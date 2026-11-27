@@ -1,5 +1,5 @@
 'use strict';
-// Integracao: origem do cliente, aviso imediato de urgencia e honorarios, com o
+// Integracao: origem do cliente, urgencia (triagem + aviso imediato) e honorarios, com o
 // server.js de verdade e os externos mockados (tests/helpers/mock-external.js).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -49,6 +49,8 @@ async function comServidor(porta, envExtra, roteiro) {
 }
 
 const RODADA = 5000; // debounce de 3 s + resposta
+const COMPLETA = 'é agora, em Maringá, é do meu marido, e quero contratar agora';
+const QUALIFICA = 'acabaram de prender meu marido aqui em Maringá, preciso de um advogado';
 const alertas = (eventos, to) => eventos.filter(e => e.t === 'meta_texto' && e.to === to && /ALERTA URGENTE/.test(e.body || ''));
 
 test('origem do cliente, urgencia em curso e honorarios (servidor)', { timeout: 60000 }, async (t) => {
@@ -68,13 +70,17 @@ test('origem do cliente, urgencia em curso e honorarios (servidor)', { timeout: 
       await sleep(RODADA);
       const meio = { painel: await s.lerPainel(), eventos: s.lerEventos() };
       await s.texto(B, 'vi no Instagram');
-      await s.texto(D, 'estão levando o carro agora, o oficial está aqui');
+      await s.texto(D, COMPLETA);
       await s.texto(F, 'na verdade [SITE]');
       await s.texto(H, 'meu primo');
       await sleep(RODADA);
+      meio.painel2 = await s.lerPainel();
+      await s.texto(D, 'estão levando o carro agora, o oficial está aqui');
+      await sleep(RODADA);
       return meio;
     }),
-    comServidor(3972, { MOCK_FALHA_ALERTA: '1' }, async (s) => { await s.texto(D, 'acabaram de prender meu marido'); await sleep(RODADA); })
+    // fase 6: so uma mensagem que ja QUALIFICA dispara o aviso (aqui, com o envio falhando)
+    comServidor(3972, { MOCK_FALHA_ALERTA: '1' }, async (s) => { await s.texto(D, QUALIFICA); await sleep(RODADA); })
   ]);
   const sistema = (lista, entrada) => lista.find(e => e.t === 'claude_sistema' && e.entrada === entrada);
 
@@ -120,26 +126,48 @@ test('origem do cliente, urgencia em curso e honorarios (servidor)', { timeout: 
     assert.match(aviso.body, /Origem:\* Site \(SITE\)/);
   });
 
-  await t.test('urgencia em curso: aviso imediato ao Dr. Willian E a Dra. Aline, uma vez so', () => {
+  // FASE 6: o detector so abre a triagem; o aviso espera a qualificacao.
+  await t.test('urgencia em curso: a primeira mensagem abre a triagem e NAO avisa ninguem', () => {
+    for (const adv of [WILLIAN, ALINE]) assert.equal(alertas(r.extra.eventos, adv).length, 0, `aviso indevido para ${adv}`);
+    const tri = r.extra.painel[D].meta.urgenciaTriagem;
+    assert.equal(tri.status, 'em_triagem');
+    assert.equal(tri.tipo, 'busca_apreensao');
+    assert.equal(tri.pergunta, 'cidade');
+    assert.equal(tri.respostas.oficialNoLocal, true);
+    assert.ok(!r.extra.painel[D].meta.alertaUrgencia);
+    // o prompt pede o que falta e nao diz que os advogados ja foram avisados
+    const sis = sistema(r.eventos, 'tem um oficial na porta, vão levar o carro');
+    assert.equal(sis.urgencia, false);
+    assert.match(sis.triagem, /NENHUM advogado foi avisado até agora/);
+    assert.match(sis.triagem, /Em qual cidade isso está acontecendo\?/);
+    assert.equal(sis.origem, ''); // em urgencia, nao pergunta a origem
+    assert.ok(r.extra.eventos.some(e => e.t === 'meta_texto' && e.to === D)); // o cliente foi respondido
+  });
+
+  await t.test('urgencia em curso: depois de qualificar, aviso ao Dr. Willian E a Dra. Aline, uma vez so', () => {
     for (const adv of [WILLIAN, ALINE]) {
       const enviados = alertas(r.eventos, adv).filter(e => e.body.includes(`+${D}`));
-      assert.equal(enviados.length, 1, `avisos para ${adv}`); // a segunda mensagem urgente nao repete
+      assert.equal(enviados.length, 1, `avisos para ${adv}`); // a mensagem urgente seguinte nao repete
       assert.match(enviados[0].body, /^🚨 \*ALERTA URGENTE\*/);
       assert.match(enviados[0].body, /Resumo: tem um oficial na porta, vão levar o carro/);
+      assert.match(enviados[0].body, /cidade: Maringá \(na região\)/);
+      assert.match(enviados[0].body, /quer contratar agora: sim/);
       assert.match(enviados[0].body, /Origem: não informada/);
     }
-    const alerta = r.painel[D].meta.alertaUrgencia;
-    assert.equal(alerta.motivo, 'oficial de justiça na porta');
-    assert.equal(alerta.canais.texto, true);
-    assert.equal(alerta.para.length, 2);
-    assert.equal(alerta.em, r.extra.painel[D].meta.alertaUrgencia.em); // o mesmo aviso, nao um novo
-    // o aviso saiu antes da resposta da Ana e o prompt recebeu o bloco de urgencia (sem pedir a origem)
-    const sis = sistema(r.eventos, 'tem um oficial na porta, vão levar o carro');
+    const meta2 = r.extra.painel2[D].meta;
+    assert.equal(meta2.urgenciaTriagem.status, 'alerta_enviado');
+    assert.equal(meta2.urgenciaTriagem.respostas.vinculo, 'marido');
+    assert.equal(meta2.alertaUrgencia.motivo, 'oficial de justiça na porta');
+    assert.equal(meta2.alertaUrgencia.canais.texto, true);
+    assert.equal(meta2.alertaUrgencia.para.length, 2);
+    assert.equal(r.painel[D].meta.alertaUrgencia.em, meta2.alertaUrgencia.em); // o mesmo aviso, nao um novo
+    assert.equal(r.painel[D].meta.urgenciaTriagem.status, 'alerta_enviado');
+    // o aviso saiu antes de a Ana responder, e so entao o prompt diz que eles foram avisados
+    const sis = sistema(r.eventos, COMPLETA);
     assert.equal(sis.urgencia, true);
-    assert.equal(sis.origem, '');
-    const ordem = r.eventos.filter(e => e.t === 'meta_texto' && (e.to === D || (e.body || '').includes(`+${D}`))).map(e => e.to);
-    assert.ok(ordem.indexOf(WILLIAN) < ordem.indexOf(D));
-    assert.ok(r.eventos.some(e => e.t === 'meta_texto' && e.to === D)); // o cliente foi respondido
+    assert.equal(sis.triagem, '');
+    const iAlerta = r.eventos.findIndex(e => e.t === 'meta_texto' && e.to === WILLIAN && (e.body || '').includes(`+${D}`));
+    assert.ok(iAlerta < r.eventos.indexOf(sis));
   });
 
   await t.test('historia antiga ("fui preso em 2020") e conversa comum nao geram aviso', () => {
@@ -147,7 +175,9 @@ test('origem do cliente, urgencia em curso e honorarios (servidor)', { timeout: 
       for (const adv of [WILLIAN, ALINE]) assert.equal(alertas(r.eventos, adv).filter(e => e.body.includes(`+${fone}`)).length, 0, fone);
     }
     assert.ok(!r.painel[E].meta || !r.painel[E].meta.alertaUrgencia);
+    assert.ok(!r.painel[E].meta || !r.painel[E].meta.urgenciaTriagem); // nem abre triagem
     assert.equal(sistema(r.eventos, 'fui preso em 2020').urgencia, false);
+    assert.equal(sistema(r.eventos, 'fui preso em 2020').triagem, '');
   });
 
   await t.test('se o envio do aviso falhar, a Ana responde ao cliente mesmo assim', () => {
@@ -156,6 +186,11 @@ test('origem do cliente, urgencia em curso e honorarios (servidor)', { timeout: 
     assert.ok(falha.eventos.some(e => e.t === 'meta_texto' && e.to === D), 'cliente sem resposta');
     assert.match(falha.saida, /\[Urgencia\] NENHUMA via confirmou o aviso imediato/);
     assert.equal(falha.painel[D].meta.alertaUrgencia.canais.texto, false);
+    // fase 6: sem confirmacao de nenhum canal, a Ana nao diz que os advogados foram avisados
+    assert.equal(falha.painel[D].meta.urgenciaTriagem.status, 'alerta_falhou');
+    const sis = sistema(falha.eventos, QUALIFICA);
+    assert.equal(sis.urgencia, false);
+    assert.match(sis.triagem, /aviso automático aos advogados NÃO foi confirmado/);
   });
 
   await t.test('honorarios: o prompt enviado ao Claude so cita "30%" e "nada adiantado" como proibidos', () => {
@@ -183,6 +218,15 @@ test('origem do cliente, urgencia em curso e honorarios (servidor)', { timeout: 
     assert.equal(origemLbl(r.painel[C]), '');
     origemCounts();
     assert.equal(alvo.textContent, 'Anúncio 1 · Google 0 · Instagram 2 · Site 1 · Indicação 1 · Sem origem 3');
+    // fase 6: etiqueta com o status da triagem de urgencia
+    assert.ok(r.html.includes('bdg urg'));
+    const trechoUrg = script.slice(script.indexOf('const URG_STATUS='), script.indexOf('async function auth('));
+    const { urgLbl, urgInfo } = new Function(`${trechoUrg}; return { urgLbl, urgInfo };`)();
+    assert.equal(urgLbl(r.extra.painel[D]), 'urgência: em triagem');
+    assert.equal(urgLbl(r.painel[D]), 'alerta enviado');
+    assert.equal(urgInfo(r.painel[D]), 'alerta enviado · cidade: Maringá · vínculo: marido · contratar: sim');
+    assert.equal(urgLbl(r.painel[C]), '');
+    assert.ok(script.includes('esc(urgLbl(c))') && script.includes('esc(urgInfo(c))'));
     assert.ok(script.includes("esc(origemLbl(c))"));
   });
 });

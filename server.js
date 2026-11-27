@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 const origemLib = require('./origem');
+const triagemLib = require('./urgencia-triagem');
 const crypto = require('crypto');
 const voiceLib = require('./voice');
 const painelAudio = require('./painel-audio');
@@ -497,7 +498,8 @@ URGÊNCIA
 - Nesses casos, chame a ferramenta de encaminhamento imediatamente com urgencia = true e o motivo_urgencia. No máximo uma pergunta antes; o que faltar vai como "não informado", e o horário como "o quanto antes".
 - Diga ao cliente algo realista: "Vou avisar o Dr. Willian agora mesmo." Não prometa em quantos minutos ele liga.
 - Ansiedade ou pressa comuns não são urgência. Marque só nas situações acima.
-- Quando o sistema informar "URGÊNCIA EM CURSO" (prisão acontecendo agora, flagrante, oficial na porta, mandado sendo cumprido), o Dr. Willian e a Dra. Aline já receberam um aviso imediato: diga isso ao cliente, tranquilize e faça o encaminhamento com urgencia = true na mesma resposta.
+- Prisão acontecendo agora, flagrante, oficial na porta e mandado sendo cumprido passam antes por uma TRIAGEM conduzida pelo sistema. Quando houver um bloco "TRIAGEM DE URGÊNCIA", siga só o que ele pedir: faça a pergunta indicada, uma de cada vez, e NÃO diga que avisou ou vai avisar algum advogado, nem encaminhe como urgente, enquanto o sistema não informar "URGÊNCIA EM CURSO".
+- Quando o sistema informar "URGÊNCIA EM CURSO", aí sim o Dr. Willian e a Dra. Aline já receberam um aviso imediato: diga isso ao cliente, tranquilize e faça o encaminhamento com urgencia = true na mesma resposta.
 
 EMERGÊNCIA (RISCO À VIDA OU VIOLÊNCIA)
 - Se alguém estiver em perigo agora, a primeira coisa é orientar a ligar 190 (Polícia Militar). Em violência contra a mulher, também o 180 (Central de Atendimento à Mulher).
@@ -763,15 +765,26 @@ function returningClientContext(userId, agora = Date.now()) {
     `\n[FIM DOS DADOS DO SISTEMA]`;
 }
 
-// Blocos de origem do cliente e de urgencia em curso (dados do meta da conversa).
+// Blocos de origem do cliente e de urgencia (dados do meta da conversa).
+//   - aviso imediato ja enviado e recente  -> "URGENCIA EM CURSO" (os advogados foram avisados)
+//   - triagem em andamento ou nao qualificada -> "TRIAGEM DE URGENCIA" (ninguem foi avisado)
 function blocosOrigemEUrgencia(userId) {
   const meta = conversationMeta[userId] || {};
   const alerta = meta.alertaUrgencia;
-  // O bloco de urgencia vale enquanto o aviso imediato e recente e o
-  // encaminhamento formal ainda nao aconteceu depois dele.
-  const emCurso = origemLib.alertaRecente(meta, Date.now(), URGENCIA_ALERTA_HORAS) &&
-    !(meta.notificacao && meta.notificacao.em > alerta.em) && !(meta.triagemEm && meta.triagemEm > alerta.em);
-  return origemLib.blocoOrigemPrompt(meta, { urgenciaEmCurso: emCurso }) + (emCurso ? origemLib.blocoUrgenciaPrompt() : '');
+  const tri = meta.urgenciaTriagem;
+  const encaminhadoDepois = (ref) => !!ref && ((meta.notificacao && meta.notificacao.em > ref) || (meta.triagemEm && meta.triagemEm > ref));
+
+  // O bloco de urgencia vale enquanto o aviso imediato e recente, foi confirmado
+  // e o encaminhamento formal ainda nao aconteceu depois dele.
+  const alertaFalhou = !!tri && tri.status === triagemLib.STATUS.ALERTA_FALHOU;
+  const emCurso = origemLib.alertaRecente(meta, Date.now(), URGENCIA_ALERTA_HORAS) && !alertaFalhou && !encaminhadoDepois(alerta.em);
+  if (emCurso) return origemLib.blocoOrigemPrompt(meta, { urgenciaEmCurso: true }) + origemLib.blocoUrgenciaPrompt();
+
+  // Triagem: so enquanto e recente (2h) e o caso ainda nao foi encaminhado depois dela
+  const triRecente = !!tri && tri.status !== triagemLib.STATUS.ALERTA_ENVIADO &&
+    Date.now() - new Date(tri.atualizadoEm || 0).getTime() < 2 * 3600 * 1000 && !encaminhadoDepois(tri.atualizadoEm);
+  const blocoTri = triRecente ? triagemLib.blocoTriagemPrompt(tri) : '';
+  return origemLib.blocoOrigemPrompt(meta, { urgenciaEmCurso: !!blocoTri }) + blocoTri;
 }
 
 function buildSystemPrompt(userId, retornoCtx = '') {
@@ -853,7 +866,11 @@ async function executeTool(toolName, toolInput, clientPhone) {
     const { area, nome_cliente, horario_preferido, resumo_caso } = toolInput;
     const specialist = SPECIALISTS[area] || SPECIALISTS.civel_bancario;
     const areaLabel = area.toUpperCase().replace('_', '/');
-    const urgente = toolInput.urgencia === true;
+    // Prisao/busca que passou pela triagem e NAO qualificou segue como atendimento
+    // normal: a marca de URGENTE so sai junto com o aviso imediato.
+    const rebaixada = triagemLib.deveRebaixarUrgencia(conversationMeta[clientPhone], toolInput);
+    if (rebaixada) console.log(`[Triagem] +${clientPhone}: encaminhamento sem a marca de urgente (a triagem nao qualificou para aviso imediato).`);
+    const urgente = toolInput.urgencia === true && !rebaixada;
     const motivoUrgencia = String(toolInput.motivo_urgencia || '').trim() || 'não informado';
     if (urgente) console.warn(`[Especialista] URGENTE: ${nome_cliente} (+${clientPhone}) - ${motivoUrgencia}`);
 
@@ -1279,7 +1296,7 @@ function gastosRow(chave, ym) { return `GASTOS#${chave}#${ym}`; }
 
 // Chaves internas que NUNCA devem aparecer no painel de conversas de clientes
 function isInternalRow(phone) {
-  return /^(TRIAGE|ADV|AGENDA|GASTOS|VOICE)#/.test(String(phone || ''));
+  return /^(TRIAGE|ADV|AGENDA|GASTOS|VOICE|DIGEST)#/.test(String(phone || ''));
 }
 
 // Data e hora de Brasilia de um instante, em partes. E a UNICA fonte de "hoje" do
@@ -2216,6 +2233,7 @@ async function tarefasAgendadas() {
   try { await checarAtendimentosSemEncaminhamento(); } catch (e) { console.error('[Agendador] rede de seguranca:', e.message); }
   try { await checarLembretes(); } catch (e) { console.error('[Agendador] lembretes:', e.message); }
   try { await checarRelatorioMensal(); } catch (e) { console.error('[Agendador] relatorio:', e.message); }
+  try { await checarDigestUrgencia(); } catch (e) { console.error('[Agendador] resumo matinal:', e.message); }
 }
 
 // Envia um texto possivelmente longo, quebrando no limite do WhatsApp
@@ -2764,9 +2782,77 @@ async function enviarAlertaUrgencia(userId, trecho, motivo) {
   return { canais, para: destinos.map(d => d.email) };
 }
 
+// Regiao de atuacao para o aviso imediato (opcional: URGENCIA_REGIAO) e hora do
+// resumo matinal em Brasilia (opcional: URGENCIA_DIGEST_HORA, padrao 8).
+const URGENCIA_REGIAO = triagemLib.listaRegiao(process.env);
+const URGENCIA_DIGEST_HORA = triagemLib.horaDigest(process.env);
+const DIGEST_ROW = 'DIGEST#urgencia';
+const DIGEST_JANELA_HORAS = 72;      // conversas olhadas para montar o resumo
+const DIGEST_MAX_TENTATIVAS = 3;     // se nenhum canal confirmar, desiste no dia
+let digestYmdOk = null;              // dia (Brasilia) ja processado nesta execucao
+let digestRodando = false;
+let digestFalhas = { ymd: null, n: 0 };
+
+// Resumo matinal: os casos que passaram pelo detector e NAO geraram aviso
+// imediato vao, uma vez por dia, para o Dr. Willian e a Dra. Aline. Roda no
+// agendador que ja existe (e no inicio de cada webhook): se ja passou da hora e
+// o resumo de hoje ainda nao saiu, envia agora. O "ja enviei hoje" fica numa
+// linha interna do Supabase, para sobreviver a restart.
+async function checarDigestUrgencia() {
+  if (!supabaseEnabled() || digestRodando) return null;
+  const agora = partesBR();
+  if (agora.hora < URGENCIA_DIGEST_HORA || digestYmdOk === agora.ymd) return null;
+  digestRodando = true;
+  try {
+    const destinos = origemLib.dedupeDestinos([
+      { phone: ADMIN_PHONE, email: ADMIN_EMAIL },
+      { phone: SPECIALISTS.familia.phone, email: SPECIALISTS.familia.email }
+    ]);
+    const resultado = await triagemLib.executarDigest({
+      agora,
+      hora: URGENCIA_DIGEST_HORA,
+      origemTxt: origemLib.descreverOrigem,
+      lerMarcador: async () => {
+        const row = await supabaseLoadOne(DIGEST_ROW);
+        return row && row.meta ? row.meta.digestYmd : null;
+      },
+      gravarMarcador: (ymd, leads) => supabaseUpsert(DIGEST_ROW, [], { meta: { type: 'digest', digestYmd: ymd, em: new Date().toISOString(), leads }, handled: true }),
+      listarLeads: () => supabaseAtendimentosRecentes(DIGEST_JANELA_HORAS),
+      enviar: async (resumo) => {
+        let ok = false;
+        for (const d of destinos) {
+          try { if (await sendWhatsAppTemplate(d.phone, [resumo.titulo, `${resumo.leads.length} caso(s)`, '-', 'hoje, no expediente', resumo.resumoCurto])) ok = true; } catch (e) { console.error('[Resumo] template:', e.message); }
+          try { if (await sendWhatsAppMessage(d.phone, resumo.texto)) ok = true; } catch (e) { console.error('[Resumo] texto:', e.message); }
+          try { if (await sendEmailToSpecialist(d.email, resumo.assunto, resumo.html)) ok = true; } catch (e) { console.error('[Resumo] e-mail:', e.message); }
+        }
+        return ok;
+      },
+      marcarLead: async (lead) => {
+        const urgenciaTriagem = triagemLib.marcarNoDigest(lead.meta.urgenciaTriagem);
+        if (conversationMeta[lead.phone]) conversationMeta[lead.phone] = { ...conversationMeta[lead.phone], urgenciaTriagem };
+        await supabasePatch(lead.phone, { meta: { ...(lead.meta || {}), urgenciaTriagem } });
+      }
+    });
+    if (resultado === 'falhou') {
+      if (digestFalhas.ymd !== agora.ymd) digestFalhas = { ymd: agora.ymd, n: 0 };
+      digestFalhas.n++;
+      console.error(`[Resumo] Nenhum canal confirmou o resumo matinal (tentativa ${digestFalhas.n} de ${DIGEST_MAX_TENTATIVAS}).`);
+      if (digestFalhas.n >= DIGEST_MAX_TENTATIVAS) digestYmdOk = agora.ymd; // os leads continuam sem digestEm e entram amanha
+    } else {
+      digestYmdOk = agora.ymd;
+      if (resultado === 'enviado') console.log(`[Resumo] Resumo matinal de ${agora.ymd} enviado.`);
+      if (resultado === 'sem_leads') console.log(`[Resumo] Resumo matinal de ${agora.ymd}: nenhum caso em triagem.`);
+    }
+    return resultado;
+  } finally {
+    digestRodando = false;
+  }
+}
+
 // Le um lote de mensagens do CLIENTE antes de chamar o Claude:
 //   - grava a origem (codigo do link wa.me ou resposta da pessoa), sem sobrescrever;
-//   - se for urgencia EM CURSO, dispara o aviso imediato (no maximo 1 a cada janela).
+//   - se for urgencia EM CURSO, abre ou atualiza a triagem (meta.urgenciaTriagem); o
+//     aviso imediato so sai quando a triagem qualifica (no maximo 1 a cada janela).
 // O texto das mensagens nao e alterado. Nunca lanca erro: o atendimento segue.
 function registrarSinaisDoCliente(userId, messages) {
   return enqueueForUser(userId, async () => {
@@ -2786,24 +2872,43 @@ function registrarSinaisDoCliente(userId, messages) {
       console.log(`[Origem] +${userId}: ${origemLib.descreverOrigem(codigo)}`);
     }
 
-    // 2) urgencia em curso
+    // 2) urgencia em curso: o detector so ABRE a triagem. O aviso imediato espera
+    //    a qualificacao (fato atual + na regiao + quer contratar agora).
     const texto = lista.join('\n');
-    const urg = origemLib.detectUrgenciaEmCurso(texto);
-    if (urg.urgente && !origemLib.alertaRecente(conversationMeta[userId], Date.now(), URGENCIA_ALERTA_HORAS)) {
-      // Grava ANTES de enviar: outra mensagem urgente em seguida nao repete o aviso.
-      const alerta = { em: new Date().toISOString(), motivo: urg.motivo, canais: null, para: [] };
-      conversationMeta[userId] = { ...(conversationMeta[userId] || {}), alertaUrgencia: alerta };
+    const metaTri = conversationMeta[userId] || {};
+    const r = triagemLib.processarLote({
+      triagem: metaTri.urgenciaTriagem || null,
+      texto,
+      deteccao: origemLib.detectUrgenciaEmCurso(texto),
+      alertaRecente: origemLib.alertaRecente(metaTri, Date.now(), URGENCIA_ALERTA_HORAS),
+      regiao: URGENCIA_REGIAO
+    });
+    if (r.mudou) {
+      let triagem = r.triagem;
+      conversationMeta[userId] = { ...metaTri, urgenciaTriagem: triagem };
       mudou = true;
-      // Em segundo plano: a resposta da Ana ao cliente nao espera o aviso.
-      enviarAlertaUrgencia(userId, texto, urg.motivo)
-        .then((r) => {
-          const atual = conversationMeta[userId] || {};
-          if (atual.alertaUrgencia && atual.alertaUrgencia.em === alerta.em) {
-            conversationMeta[userId] = { ...atual, alertaUrgencia: { ...atual.alertaUrgencia, canais: r.canais, para: r.para } };
-            persist(userId);
-          }
-        })
-        .catch((e) => console.error(`[Urgencia] Falha ao enviar o aviso imediato de +${userId}:`, e && e.message));
+      console.log(`[Triagem] +${userId}: ${triagem.status}${triagem.pergunta ? ` (falta: ${triagem.pergunta})` : ''}`);
+
+      if (r.enviarAlerta) {
+        // Qualificou: agora sim o aviso imediato. Espera o resultado (ate 8 s) para
+        // a Ana so dizer que os advogados foram avisados se algum canal confirmou.
+        const em = new Date().toISOString();
+        const trecho = [triagem.trecho, ...triagemLib.descreverRespostas(triagem)].filter(Boolean).join(' | ');
+        let envio = null;
+        try {
+          envio = await Promise.race([enviarAlertaUrgencia(userId, trecho, triagem.motivo), sleep(8000).then(() => null)]);
+        } catch (e) {
+          console.error(`[Urgencia] Falha ao enviar o aviso imediato de +${userId}:`, e && e.message);
+          envio = { canais: { template: false, texto: false, email: false }, para: [] };
+        }
+        const confirmado = !envio || envio.canais.template || envio.canais.texto || envio.canais.email; // sem resposta em 8 s: segue como enviado
+        triagem = triagemLib.registrarEnvio(triagem, { confirmado });
+        conversationMeta[userId] = {
+          ...(conversationMeta[userId] || {}),
+          urgenciaTriagem: triagem,
+          alertaUrgencia: { em, motivo: triagem.motivo, canais: envio ? envio.canais : null, para: envio ? envio.para : [] }
+        };
+      }
     }
 
     if (mudou) persist(userId);
@@ -2963,6 +3068,10 @@ function verifyMetaSignature(req, res, next) {
 
 app.post('/webhook', verifyMetaSignature, async (req, res) => {
   res.sendStatus(200);
+
+  // Se o processo acordou depois da hora do resumo matinal, ele sai agora
+  // (em segundo plano; quase sempre e so uma comparacao em memoria).
+  checarDigestUrgencia().catch((e) => console.error('[Resumo] Falha ao conferir o resumo matinal:', e && e.message));
 
   try {
     const entry = req.body?.entry?.[0];
@@ -3185,6 +3294,7 @@ button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:
 .bdg.area{background:#10334d;color:#5cb3f0}
 .bdg.ok{background:#2a3942;color:var(--mut)}
 .bdg.origem{background:transparent;border:1px solid var(--line);color:var(--txt)}
+.bdg.urg{background:#3a2a12;color:#f0b35c}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--green);flex-shrink:0}
 .empty{padding:60px 24px;text-align:center;color:var(--mut);font-size:14px}
 /* CHAT */
@@ -3292,6 +3402,19 @@ function origemCounts(){
   document.getElementById('origens').textContent=partes.join(' · ');
 }
 
+// Triagem de urgencia (meta.urgenciaTriagem): status e respostas
+const URG_STATUS=${JSON.stringify(triagemLib.ROTULOS_STATUS)};
+function urgLbl(c){const t=c.meta&&c.meta.urgenciaTriagem;return t&&t.status?(URG_STATUS[t.status]||t.status):'';}
+function urgInfo(c){
+  const t=c.meta&&c.meta.urgenciaTriagem;if(!t||!t.status)return '';
+  const r=t.respostas||{},p=[urgLbl(c)];
+  if(r.cidade)p.push('cidade: '+r.cidade);
+  if(r.vinculo)p.push('vínculo: '+r.vinculo);
+  if(r.contratar===true)p.push('contratar: sim');
+  if(r.contratar===false)p.push('contratar: não');
+  return p.join(' · ');
+}
+
 async function auth(){
   const p=document.getElementById('pwd').value;
   const r=await fetch('/admin/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
@@ -3322,7 +3445,7 @@ function render(){
     const c=convs[ph];
     if(filter==='open'&&c.handled)return false;
     if(filter==='done'&&!c.handled)return false;
-    if(q){const hay=(ph+' '+nm(c)+' '+(c.meta&&c.meta.area||'')+' '+origemLbl(c)+' '+(c.meta&&c.meta.origem||'')).toLowerCase();if(!hay.includes(q))return false;}
+    if(q){const hay=(ph+' '+nm(c)+' '+(c.meta&&c.meta.area||'')+' '+origemLbl(c)+' '+(c.meta&&c.meta.origem||'')+' '+urgInfo(c)).toLowerCase();if(!hay.includes(q))return false;}
     return true;
   });
   if(!keys.length){el.innerHTML='<div class="empty">Nenhuma conversa encontrada.</div>';return;}
@@ -3333,12 +3456,13 @@ function render(){
     const esp=c.meta&&c.meta.especialista?\`<span class="bdg">\${esc(c.meta.especialista)}</span>\`:'';
     const done=c.handled?'<span class="bdg ok">✓ tratada</span>':'';
     const orig=origemLbl(c)?'<span class="bdg origem">'+esc(origemLbl(c))+'</span>':'';
+    const urg=urgLbl(c)?'<span class="bdg urg">'+esc(urgLbl(c))+'</span>':'';
     return \`<div class="item" onclick="openChat('\${ph}')">
       <div class="av" style="background:\${color(ph)}">\${esc(initials(c)).toUpperCase()}</div>
       <div class="ci">
         <div class="crow"><div class="cp">\${esc(nm(c))}</div><div class="ctime">\${fmtDay(c.updated_at)}</div></div>
         <div class="cv">\${prev}</div>
-        <div class="badges">\${area}\${esp}\${orig}\${done}\${!c.handled?'<span class="dot"></span>':''}</div>
+        <div class="badges">\${area}\${esp}\${orig}\${urg}\${done}\${!c.handled?'<span class="dot"></span>':''}</div>
       </div>
     </div>\`;
   }).join('');
@@ -3353,7 +3477,8 @@ function openChat(ph){
     (c.meta.area?\`<b>\${esc(c.meta.area)}</b>\`:'')+
     (c.meta.especialista?\`· \${esc(c.meta.especialista)}\`:'')+
     (c.meta.horario?\`· ⏰ \${esc(c.meta.horario)}\`:'')+
-    (origemLbl(c)?'· 🏷️ '+esc(origemLbl(c)):'');}
+    (origemLbl(c)?'· 🏷️ '+esc(origemLbl(c)):'')+
+    (urgInfo(c)?'· 🚨 '+esc(urgInfo(c)):'');}
   else bar.style.display='none';
   const el=document.getElementById('cmsgs');let lastDay='';
   el.innerHTML=ms.map(m=>{
