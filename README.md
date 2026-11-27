@@ -91,6 +91,12 @@ O recurso vem **desligado**. Variáveis:
 - `/health` e `/diagnostico` mostram só se o recurso está ligado e se a chave está definida — nunca a chave.
 - Testes (sem credenciais e sem rede): `npm test`.
 
+**Áudio no painel `/admin`.** Na conversa de cada cliente, o painel mostra a transcrição do áudio
+do cliente ("🎤 áudio do cliente (transcrito)") e o texto do recado de voz da Ana ("🔊 Ana respondeu
+em áudio"), com os dados que foram por escrito depois. Nenhum arquivo de áudio é armazenado: só o
+texto, dentro do histórico da conversa que já existe. A retenção é a mesma das conversas. Um áudio
+que não pôde ser transcrito não aparece no painel.
+
 ## 📚 Documentação Completa
 
 Veja `RENDER_DEPLOY.md` para instruções passo-a-passo de deploy.
