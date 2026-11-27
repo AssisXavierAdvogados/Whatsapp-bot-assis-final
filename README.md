@@ -66,6 +66,33 @@ processar a mensagem.
   mas registra um aviso bem visível no log e o `/health` mostra `"appSecret": false`.
 - Depois de configurar no Render, confira em `/health` se aparece `"appSecret": true`.
 
+### Origem dos atendimentos
+
+Cada conversa guarda de onde o cliente veio (`meta.origem`), e o painel `/admin` mostra a etiqueta
+e a contagem por origem. Use estes links nos anúncios, no Google, no Instagram e no site — a
+mensagem já vem preenchida com o código:
+
+| Origem | Link |
+|---|---|
+| Anúncio / Google Ads (`ADS`) | `https://wa.me/5544999778551?text=Ol%C3%A1%21%20%28c%C3%B3d.%20ADS%29` |
+| Google Meu Negócio / Maps (`GMN`) | `https://wa.me/5544999778551?text=Ol%C3%A1%21%20%28c%C3%B3d.%20GMN%29` |
+| Instagram (`INSTA`) | `https://wa.me/5544999778551?text=Ol%C3%A1%21%20%28c%C3%B3d.%20INSTA%29` |
+| Site do escritório (`SITE`) | `https://wa.me/5544999778551?text=Ol%C3%A1%21%20%28c%C3%B3d.%20SITE%29` |
+
+- A mensagem chega como `Olá! (cód. ADS)`. O cliente pode editar ou acrescentar texto; o código
+  continua sendo reconhecido (também nas formas `(cod ADS)`, `cód. ADS` e `[ADS]`).
+- Sem código, a Ana pergunta uma única vez como a pessoa conheceu o escritório e registra a resposta
+  (`INDICACAO` e `OUTRO` só surgem assim). Em urgência ela não pergunta.
+- A origem nunca é sobrescrita depois de gravada.
+
+### Aviso imediato de urgência em curso
+
+Se o cliente relata algo **acontecendo agora** (prisão, flagrante, oficial na porta, mandado sendo
+cumprido, busca e apreensão em curso), o Dr. Willian e a Dra. Aline recebem na hora um aviso
+"ALERTA URGENTE" por WhatsApp e e-mail, sem esperar o encaminhamento da Ana. É no máximo um aviso
+por conversa a cada 6 horas (`URGENCIA_ALERTA_HORAS`, opcional). O encaminhamento formal ao
+especialista da área continua acontecendo depois, normalmente.
+
 ### Recado de voz da Ana (ElevenLabs)
 
 Quando o **último recado do cliente foi um áudio**, a Ana pode responder com um recado de voz
@@ -109,6 +136,8 @@ Veja `RENDER_DEPLOY.md` para instruções passo-a-passo de deploy.
 - Defina `APP_SECRET` para que o `/webhook` só aceite chamadas assinadas pela Meta
 - A Ana não avalia chances de êxito nem sugere resultado ao cliente (Provimento 205/2021 da OAB):
   a avaliação preliminar dos documentos segue apenas no resumo interno enviado ao advogado
+- A Ana também não informa honorários, percentual nem "nada adiantado" (Provimento 205/2021, art. 3º, I):
+  em qualquer área, diz apenas que os honorários dependem da análise do caso e que o advogado informa após a consulta
 
 ## 📞 Suporte
 
