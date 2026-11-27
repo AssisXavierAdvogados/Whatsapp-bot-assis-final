@@ -22,7 +22,10 @@ function route(method, url, body) {
     const ultima = body.messages[body.messages.length - 1];
     const txt = typeof ultima.content === 'string' ? ultima.content : JSON.stringify(ultima.content);
     const cliente = String(body.system).includes('Você é Ana, assistente virtual de atendimento');
-    ev({ t: 'claude', cliente, entrada: txt });
+    // campos: todas as chaves que chegaram nas mensagens (deve ser so role e content)
+    const campos = [...new Set(body.messages.flatMap(m => Object.keys(m)))].sort();
+    ev({ t: 'claude', cliente, entrada: txt, campos });
+    if (/FALHA_CLAUDE/.test(txt)) { const e = new Error('falha simulada do Claude'); e.response = { status: 500, data: { error: { message: 'erro simulado' } } }; throw e; }
     if (!cliente) return { data: { content: [{ type: 'text', text: 'Resposta da assistente ao advogado: link https://exemplo.com e lista.' }], stop_reason: 'end_turn' } };
     return { data: { content: [{ type: 'text', text: /LONGO/.test(txt) ? RESPOSTA_LONGA : RESPOSTA_CURTA }], stop_reason: 'end_turn' } };
   }

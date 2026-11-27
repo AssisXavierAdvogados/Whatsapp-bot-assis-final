@@ -6,6 +6,7 @@ const path = require('path');
 const pdfParse = require('pdf-parse');
 const crypto = require('crypto');
 const voiceLib = require('./voice');
+const painelAudio = require('./painel-audio');
 
 dotenv.config();
 
@@ -2315,11 +2316,13 @@ async function handleSpecialistMessage(message, senderNumber, specialist) {
   await sendWhatsAppMessage(senderNumber, `${nomeCurto}, recebi — mas por aqui só consigo ler texto e áudio.`);
 }
 
-async function callClaudeAPI(userMessage, userId) {
-  return enqueueForUser(userId, () => callClaudeAPIInternal(userMessage, userId));
+// opts.parts (opcional): trechos do lote do cliente ({ audio, text }) so para o
+// painel /admin. Nunca vai para o Claude, que recebe apenas role/content.
+async function callClaudeAPI(userMessage, userId, opts = {}) {
+  return enqueueForUser(userId, () => callClaudeAPIInternal(userMessage, userId, opts));
 }
 
-async function callClaudeAPIInternal(userMessage, userId) {
+async function callClaudeAPIInternal(userMessage, userId, opts = {}) {
   try {
     await ensureStateLoaded(userId);
 
@@ -2327,9 +2330,11 @@ async function callClaudeAPIInternal(userMessage, userId) {
     const retornoCtx = returningClientContext(userId);
     if (retornoCtx) console.log(`[Retorno] ${userId} voltou depois de mais de ${RETORNO_DIAS} dias.`);
 
-    conversationHistory[userId].push({ role: 'user', content: userMessage, ts: new Date().toISOString() });
+    const entrada = { role: 'user', content: userMessage, ts: new Date().toISOString() };
+    if (Array.isArray(opts.parts) && opts.parts.length) entrada.parts = opts.parts;
+    conversationHistory[userId].push(entrada);
 
-    // A API do Claude recebe apenas role/content (sem o campo ts) e ja saneado,
+    // A API do Claude recebe apenas role/content (sem ts, parts ou voice) e ja saneado,
     // para que historicos corrompidos por bugs antigos voltem a funcionar.
     const messages = sanitizeMessages(
       conversationHistory[userId].map(({ role, content }) => ({ role, content }))
@@ -2746,6 +2751,25 @@ function shouldReplyWithVoice(batchMessages) {
   return voiceLib.isAudioTranscript(ultima);
 }
 
+// Painel /admin: registra na entrada do historico que a resposta da Ana foi
+// enviada como recado de voz, e quais dados foram por escrito depois do audio.
+// So texto; nenhum audio e guardado. Qualquer falha vira um aviso no log.
+function markVoiceReplyInHistory(to, reply, dataText) {
+  return enqueueForUser(to, async () => {
+    await ensureStateLoaded(to);
+    const i = painelAudio.findAssistantEntryToMark(conversationHistory[to], reply);
+    if (i === -1) {
+      console.warn(`[Painel] Recado de voz para ${to} enviado, mas nao achei a resposta no historico para marcar.`);
+      return;
+    }
+    conversationHistory[to][i].voice = true;
+    conversationHistory[to][i].dataText = dataText || null;
+    persist(to);
+  }).catch((e) => {
+    console.warn(`[Painel] Nao consegui marcar o recado de voz de ${to} no historico: ${e && e.message}`);
+  });
+}
+
 // Entrega a resposta da Ana a um CLIENTE: recado de voz (com os dados copiaveis
 // num texto a parte) quando couber; em qualquer outro caso, os baloes de sempre.
 // O historico da conversa ja guarda o texto da resposta, nos dois casos.
@@ -2753,6 +2777,9 @@ async function deliverClientReply(to, reply, batchMessages) {
   if (shouldReplyWithVoice(batchMessages)) {
     const r = await voice.tryVoiceReply(to, reply);
     if (r.sent) {
+      // Marca no historico que esta resposta saiu por voz (so para o painel).
+      // Sem await: o texto de dados ao cliente nao espera nem depende disso.
+      markVoiceReplyInHistory(to, reply, r.dataText);
       if (r.dataText) {
         showTyping(to);
         await sleep(bubblePauseMs(r.dataText));
@@ -2907,7 +2934,10 @@ app.post('/webhook', verifyMetaSignature, async (req, res) => {
         delete pendingMessages[senderNumber];
         await enqueueForUser(senderNumber, async () => {
           await ensureStateLoaded(senderNumber);
-          conversationHistory[senderNumber].push({ role: 'user', content: pending.messages.join('\n'), ts: new Date().toISOString() });
+          const entrada = { role: 'user', content: pending.messages.join('\n'), ts: new Date().toISOString() };
+          const parts = painelAudio.buildParts(pending.messages);
+          if (parts) entrada.parts = parts; // so para o painel: quais trechos foram audio
+          conversationHistory[senderNumber].push(entrada);
           persist(senderNumber);
         });
       }
@@ -2974,7 +3004,9 @@ function queueClientText(senderNumber, text) {
     console.log(`[Batch] Processando ${batch.messages.length} mensagem(ns) de ${senderNumber} (${Date.now() - batch.firstAt} ms apos a primeira)`);
 
     try {
-      const reply = await callClaudeAPI(combined, senderNumber);
+      // parts: quais trechos do lote foram audio (so para o painel; null se nenhum)
+      const parts = painelAudio.buildParts(batch.messages);
+      const reply = await callClaudeAPI(combined, senderNumber, { parts });
       await deliverClientReply(senderNumber, reply, batch.messages);
     } catch (error) {
       console.error('[Batch] Erro ao processar:', error);
@@ -3049,6 +3081,10 @@ button:active{transform:scale(.98)}.err{color:#ef4444;font-size:13px;margin-top:
 .cact{flex-shrink:0;padding:10px 14px;background:var(--panel);display:flex;gap:10px}
 .cact button{margin:0}
 .btn-ok{background:var(--green)}.btn-undo{background:#2a3942}
+.tag{font-size:11px;font-weight:600;color:var(--mut);margin-bottom:2px}
+.pt+.pt,.pw+.tag{margin-top:6px}
+.pw{white-space:pre-wrap}
+.tr{font-style:italic;opacity:.85}
 .daysep{align-self:center;background:#1d2a32;color:var(--mut);font-size:11px;padding:4px 12px;border-radius:10px;margin:6px 0}
 </style>
 </head>
@@ -3097,6 +3133,27 @@ let tk=localStorage.getItem('ana_tk')||'',convs={},filter='all',current='';
 const COLORS=['#e57373','#64b5f6','#81c784','#ffb74d','#ba68c8','#4db6ac','#f06292','#7986cb','#a1887f','#90a4ae'];
 function color(ph){let s=0;for(let i=0;i<ph.length;i++)s+=ph.charCodeAt(i);return COLORS[s%COLORS.length];}
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// Preview da lista: ultimo trecho da ultima mensagem (audio do cliente / resposta por voz)
+function prevOf(m){
+  if(m.role==='user'){
+    if(m.parts&&m.parts.length){const p=m.parts[m.parts.length-1];return (p.audio?'🎤 ':'')+p.text;}
+    return m.text;
+  }
+  return (m.voice?'🔊 Ana: ':'Ana: ')+m.text;
+}
+// Corpo do balao na conversa. Tudo passa por esc(): o conteudo vem de clientes.
+function bodyOf(m){
+  if(m.role==='user'&&m.parts&&m.parts.length){
+    return m.parts.map(p=>p.audio
+      ?'<div class="pt"><div class="tag">🎤 áudio do cliente (transcrito)</div><div class="tr pw">'+esc(p.text)+'</div></div>'
+      :'<div class="pt pw">'+esc(p.text)+'</div>').join('');
+  }
+  if(m.role!=='user'&&m.voice){
+    return '<div class="tag">🔊 Ana respondeu em áudio</div><div class="pw">'+esc(m.text)+'</div>'+
+      (m.dataText?'<div class="tag">✍️ Enviado por escrito:</div><div class="pw">'+esc(m.dataText)+'</div>':'');
+  }
+  return esc(m.text);
+}
 function nm(c){return (c.meta&&c.meta.nome)?c.meta.nome:('+'+c.phone);}
 function initials(c){const n=(c.meta&&c.meta.nome)?c.meta.nome:c.phone;const p=n.trim().split(/\\s+/);return ((p[0]||'')[0]||'')+((p[1]||'')[0]||p[0].slice(-1)||'');}
 function fmtTime(ts){if(!ts)return '';const d=new Date(ts);return d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}
@@ -3141,7 +3198,7 @@ function render(){
   if(!keys.length){el.innerHTML='<div class="empty">Nenhuma conversa encontrada.</div>';return;}
   el.innerHTML=keys.map(ph=>{
     const c=convs[ph],ms=c.messages,last=ms[ms.length-1];
-    const prev=last?(last.role==='user'?'':'Ana: ')+esc(last.text.substring(0,48)):'';
+    const prev=last?esc(prevOf(last).substring(0,48)):'';
     const area=c.meta&&c.meta.area?\`<span class="bdg area">\${esc(c.meta.area)}</span>\`:'';
     const esp=c.meta&&c.meta.especialista?\`<span class="bdg">\${esc(c.meta.especialista)}</span>\`:'';
     const done=c.handled?'<span class="bdg ok">✓ tratada</span>':'';
@@ -3172,7 +3229,7 @@ function openChat(ph){
     if(day&&day!==lastDay){lastDay=day;sep=\`<div class="daysep">\${day}</div>\`;}
     return sep+\`<div class="msg \${m.role==='user'?'u':'a'}">
       <div class="who">\${m.role==='user'?'Cliente':'Ana'}</div>
-      \${esc(m.text)}\${m.ts?\`<div class="mt">\${fmtTime(m.ts)}</div>\`:''}
+      \${bodyOf(m)}\${m.ts?\`<div class="mt">\${fmtTime(m.ts)}</div>\`:''}
     </div>\`;
   }).join('');
   updHBtn();
@@ -3209,9 +3266,9 @@ app.get('/admin/conversations', async (req, res) => {
   }
 
   const result = {};
-  const onlyText = (msgs) => msgs
-    .filter(m => typeof m.content === 'string' && m.content.trim())
-    .map(m => ({ role: m.role, text: m.content, ts: m.ts || null }));
+  // { role, text, ts } como sempre, mais "parts" (trechos de audio/texto do cliente)
+  // e "voice"/"dataText" (resposta da Ana por voz) quando houver.
+  const onlyText = (msgs) => painelAudio.toPanelMessages(msgs);
 
   // Fonte principal: arquivo permanente no Supabase
   const rows = await supabaseGetAll();
