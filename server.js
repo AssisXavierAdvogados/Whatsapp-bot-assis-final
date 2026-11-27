@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 const crypto = require('crypto');
+const voiceLib = require('./voice');
 
 dotenv.config();
 
@@ -1256,7 +1257,7 @@ function gastosRow(chave, ym) { return `GASTOS#${chave}#${ym}`; }
 
 // Chaves internas que NUNCA devem aparecer no painel de conversas de clientes
 function isInternalRow(phone) {
-  return /^(TRIAGE|ADV|AGENDA|GASTOS)#/.test(String(phone || ''));
+  return /^(TRIAGE|ADV|AGENDA|GASTOS|VOICE)#/.test(String(phone || ''));
 }
 
 // Data e hora de Brasilia de um instante, em partes. E a UNICA fonte de "hoje" do
@@ -2693,6 +2694,77 @@ async function sendWhatsAppMessage(to, message) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// RECADO DE VOZ (so no atendimento a cliente; ver voice.js)
+// Desligado por padrao: VOICE_REPLIES_ENABLED precisa ser true/1/yes.
+// ---------------------------------------------------------------------------
+
+// Uso diario de voz numa linha propria do Supabase, para o teto sobreviver a um
+// restart do Render. Estas funcoes LANCAM erro em caso de falha: o voice.js
+// registra o aviso e segue so com a memoria.
+const voiceUsageStore = supabaseEnabled() ? {
+  async load() {
+    const r = await axios.get(
+      `${SUPABASE_URL}/rest/v1/conversations?phone=eq.${encodeURIComponent(voiceLib.USAGE_ROW)}&select=meta`,
+      { timeout: 8000, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    return (r.data && r.data[0] && r.data[0].meta) || null;
+  },
+  async save(meta) {
+    await axios.post(
+      `${SUPABASE_URL}/rest/v1/conversations`,
+      { phone: voiceLib.USAGE_ROW, messages: [], meta, handled: true, updated_at: new Date().toISOString() },
+      {
+        timeout: 8000,
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates'
+        }
+      }
+    );
+  }
+} : null;
+
+const voice = voiceLib.createVoiceService({
+  env: process.env,
+  whatsapp: { token: WHATSAPP_TOKEN, phoneNumberId: PHONE_NUMBER_ID, graphVersion: 'v19.0' },
+  store: voiceUsageStore
+});
+
+// Envia um audio OGG/Opus como recado de voz. Lanca erro se o upload ou o envio falhar.
+async function sendWhatsAppAudio(to, oggBuffer) {
+  return voiceLib.sendWhatsAppAudio(to, oggBuffer, { token: WHATSAPP_TOKEN, phoneNumberId: PHONE_NUMBER_ID, graphVersion: 'v19.0' });
+}
+
+// Recado de voz so quando a flag esta ligada E a ULTIMA mensagem do lote do
+// cliente foi um audio. Audio seguido de texto -> texto. Texto seguido de audio -> voz.
+function shouldReplyWithVoice(batchMessages) {
+  if (!voice.config.enabled) return false;
+  const ultima = Array.isArray(batchMessages) ? batchMessages[batchMessages.length - 1] : null;
+  return voiceLib.isAudioTranscript(ultima);
+}
+
+// Entrega a resposta da Ana a um CLIENTE: recado de voz (com os dados copiaveis
+// num texto a parte) quando couber; em qualquer outro caso, os baloes de sempre.
+// O historico da conversa ja guarda o texto da resposta, nos dois casos.
+async function deliverClientReply(to, reply, batchMessages) {
+  if (shouldReplyWithVoice(batchMessages)) {
+    const r = await voice.tryVoiceReply(to, reply);
+    if (r.sent) {
+      if (r.dataText) {
+        showTyping(to);
+        await sleep(bubblePauseMs(r.dataText));
+        await sendWhatsAppMessage(to, r.dataText);
+      }
+      return;
+    }
+    console.log(`[Voz] Resposta em texto para ${to} (motivo: ${r.reason}).`);
+  }
+  await sendReplyInBubbles(to, reply);
+}
+
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -2903,7 +2975,7 @@ function queueClientText(senderNumber, text) {
 
     try {
       const reply = await callClaudeAPI(combined, senderNumber);
-      await sendReplyInBubbles(senderNumber, reply);
+      await deliverClientReply(senderNumber, reply, batch.messages);
     } catch (error) {
       console.error('[Batch] Erro ao processar:', error);
     }
@@ -3303,6 +3375,8 @@ app.get('/health', (req, res) => {
       TEMPLATE_LANG: TEMPLATE_LANG,
       SUPABASE: supabaseEnabled() ? 'conectado' : 'NAO DEFINIDO',
       TRANSCRIBE_API_KEY: TRANSCRIBE_API_KEY ? '*** (definido)' : 'NAO DEFINIDO',
+      VOICE_REPLIES_ENABLED: voice.config.enabled,
+      ELEVENLABS_API_KEY: voice.config.apiKey ? '*** (definido)' : 'NAO DEFINIDO',
       APP_SECRET: APP_SECRET ? '*** (definido)' : 'NAO DEFINIDO (webhook sem validacao de assinatura)',
       VERIFY_TOKEN: VERIFY_TOKEN
     }
@@ -3582,6 +3656,29 @@ async function checarEmail() {
   }
 }
 
+// Recado de voz: so confere configuracao e o binario do ffmpeg. NAO chama a
+// ElevenLabs (gastaria credito) e nunca mostra a chave.
+function checarVoz() {
+  const st = voice.status();
+  const nome = 'Recado de voz (ElevenLabs)';
+  const chave = st.apiKeyDefined ? '*** (definido)' : 'NAO DEFINIDO';
+  const ffmpeg = st.ffmpeg ? 'acessivel' : 'NAO encontrado';
+  const resumo = `ELEVENLABS_API_KEY: ${chave}. ffmpeg: ${ffmpeg}. Limites: ${st.maxChars} caracteres por recado, ` +
+    `${st.clientDailyLimit} recados por cliente/dia, ${st.dailyCharLimit} caracteres/dia.`;
+  if (!st.enabled) {
+    return diagResult(nome, true, `Desligado (VOICE_REPLIES_ENABLED diferente de true): a Ana responde so em texto. ${resumo}`);
+  }
+  if (!st.apiKeyDefined) {
+    return diagResult(nome, false, `Ligado, mas sem chave: a Ana responde em texto. ${resumo}`,
+      'No painel do Render > Environment, adicione ELEVENLABS_API_KEY (elevenlabs.io > API Keys).');
+  }
+  if (!st.ffmpeg) {
+    return diagResult(nome, false, `Ligado, mas o ffmpeg nao foi encontrado: a Ana responde em texto. ${resumo}`,
+      'Confira se a dependencia ffmpeg-static foi instalada no build (npm install).');
+  }
+  return diagResult(nome, true, `Ligado. ${resumo} (A chave nao e testada aqui para nao gastar credito.)`);
+}
+
 async function checarTranscricao() {
   if (!TRANSCRIBE_API_KEY) {
     return diagResult('Transcrição de áudio (Groq/Whisper)', false, 'TRANSCRIBE_API_KEY não definida — áudios recebem a resposta pedindo texto.',
@@ -3632,7 +3729,7 @@ async function rodarDiagnostico(opts = {}) {
   const [claude, whats, webhook, supa, email, audio] = await Promise.all([
     checarClaude(), checarWhatsApp(), checarWebhookMeta(opts.waba), checarSupabase(), checarEmail(), checarTranscricao()
   ]);
-  const checks = [checarVariaveis(), claude, whats, webhook, supa, email, audio];
+  const checks = [checarVariaveis(), claude, whats, webhook, supa, email, audio, checarVoz()];
   const criticos = [checks[0], claude, whats, webhook];
   return {
     momento: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
@@ -3994,6 +4091,7 @@ ${cards || '<div class="card">Nenhum cliente registrado no servidor neste period
 app.listen(PORT, () => {
   if (!APP_SECRET) warnAppSecretMissing();
   else console.log('[Seguranca] Validacao de assinatura da Meta ATIVA no /webhook.');
+  console.log(`[Voz] Recado de voz ${voice.config.enabled ? 'LIGADO' : 'desligado'} (chave ElevenLabs: ${voice.config.apiKey ? 'definida' : 'NAO definida'}).`);
   console.log(`Chatbot Assis e Xavier Advogados rodando na porta ${PORT}`);
   console.log(`WhatsApp escritorio: ${ESCRITORIO_PHONE}`);
   console.log(`Webhook: GET|POST /webhook`);

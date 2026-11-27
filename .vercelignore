@@ -1,4 +1,6 @@
 server.js
+voice.js
+tests
 render.yaml
 RENDER_DEPLOY.md
 .env.example

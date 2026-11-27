@@ -66,6 +66,31 @@ processar a mensagem.
   mas registra um aviso bem visível no log e o `/health` mostra `"appSecret": false`.
 - Depois de configurar no Render, confira em `/health` se aparece `"appSecret": true`.
 
+### Recado de voz da Ana (ElevenLabs)
+
+Quando o **último recado do cliente foi um áudio**, a Ana pode responder com um recado de voz
+(voz Sofia, ElevenLabs). Telefone, valor, número de processo, endereço, prazo, link e afins não
+são ditados: seguem numa mensagem de texto à parte, logo depois do áudio. Advogados, documentos,
+imagens e falhas de transcrição continuam sempre em texto.
+
+O recurso vem **desligado**. Variáveis:
+
+| Variável | Padrão | Para que serve |
+|---|---|---|
+| `VOICE_REPLIES_ENABLED` | `false` | Liga o recado de voz (só com `true`, `1` ou `yes`) |
+| `ELEVENLABS_API_KEY` | — | Chave da ElevenLabs (secreta). Sem ela, a Ana responde em texto |
+| `ELEVENLABS_VOICE_ID` | `n2a9VtkZLl8j1FSXHsL7` | Voz (Sofia) |
+| `ELEVENLABS_MODEL` | `eleven_multilingual_v2` | Modelo de voz |
+| `VOICE_MAX_CHARS` | `600` | Acima disso (texto já normalizado) a resposta vai em texto |
+| `VOICE_CLIENT_DAILY_LIMIT` | `6` | Recados de voz por cliente, por dia |
+| `VOICE_DAILY_CHAR_LIMIT` | `2500` | Teto diário de caracteres enviados à ElevenLabs (1 crédito por caractere) |
+
+- O dia vira à meia-noite de Brasília. O uso do dia fica gravado no Supabase (linha `VOICE#usage`).
+- Qualquer falha (chave, crédito, limite, conversão, envio) cai para a resposta em texto de sempre.
+- A conversão para o formato de recado de voz usa o `ffmpeg` da dependência `ffmpeg-static`.
+- `/health` e `/diagnostico` mostram só se o recurso está ligado e se a chave está definida — nunca a chave.
+- Testes (sem credenciais e sem rede): `npm test`.
+
 ## 📚 Documentação Completa
 
 Veja `RENDER_DEPLOY.md` para instruções passo-a-passo de deploy.

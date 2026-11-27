@@ -38,3 +38,18 @@ services:
         sync: false
       - key: TRANSCRIBE_API_KEY
         sync: false
+      # Recado de voz da Ana (ElevenLabs). Fica desligado ate VOICE_REPLIES_ENABLED virar "true".
+      - key: VOICE_REPLIES_ENABLED
+        value: "false"
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: n2a9VtkZLl8j1FSXHsL7
+      - key: ELEVENLABS_MODEL
+        value: eleven_multilingual_v2
+      - key: VOICE_MAX_CHARS
+        value: "600"
+      - key: VOICE_CLIENT_DAILY_LIMIT
+        value: "6"
+      - key: VOICE_DAILY_CHAR_LIMIT
+        value: "2500"

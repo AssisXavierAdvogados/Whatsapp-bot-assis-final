@@ -33,6 +33,25 @@ recusa (401) as que não vierem da Meta. Sem ela o bot continua funcionando, mas
 proteção: o log mostra um aviso e o `/health` mostra `"appSecret": false`. Após salvar a
 variável (o Render reinicia o serviço), confira que o `/health` passou a mostrar `"appSecret": true`.
 
+### Recado de voz da Ana (ElevenLabs) — opcional
+
+A Ana pode responder com recado de voz quando o último recado do cliente foi um áudio. O recurso
+vem desligado; para usar, preencha em **Environment**:
+
+| Variável | Valor |
+|---|---|
+| `ELEVENLABS_API_KEY` | elevenlabs.io → API Keys (secreta) |
+| `VOICE_REPLIES_ENABLED` | `false` até terminar os testes; `true` para ligar |
+| `ELEVENLABS_VOICE_ID` | `n2a9VtkZLl8j1FSXHsL7` (Sofia) — já vem no `render.yaml` |
+| `ELEVENLABS_MODEL` | `eleven_multilingual_v2` — já vem no `render.yaml` |
+| `VOICE_MAX_CHARS` | `600` |
+| `VOICE_CLIENT_DAILY_LIMIT` | `6` |
+| `VOICE_DAILY_CHAR_LIMIT` | `2500` |
+
+Depois de salvar, confira no `/health` os campos `VOICE_REPLIES_ENABLED` e `ELEVENLABS_API_KEY`
+(aparece só `*** (definido)`, nunca a chave) e, no `/diagnostico`, o item "Recado de voz", que
+também diz se o `ffmpeg` está acessível. O diagnóstico não chama a ElevenLabs, para não gastar crédito.
+
 ## Passo 4: Fazer o deploy
 
 Toque em **"Create Web Service"**. Aguarde ~2 minutos.
