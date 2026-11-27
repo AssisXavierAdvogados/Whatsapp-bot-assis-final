@@ -85,13 +85,32 @@ mensagem já vem preenchida com o código:
   (`INDICACAO` e `OUTRO` só surgem assim). Em urgência ela não pergunta.
 - A origem nunca é sobrescrita depois de gravada.
 
-### Aviso imediato de urgência em curso
+### Aviso imediato de urgência em curso (com triagem)
 
-Se o cliente relata algo **acontecendo agora** (prisão, flagrante, oficial na porta, mandado sendo
-cumprido, busca e apreensão em curso), o Dr. Willian e a Dra. Aline recebem na hora um aviso
-"ALERTA URGENTE" por WhatsApp e e-mail, sem esperar o encaminhamento da Ana. É no máximo um aviso
-por conversa a cada 6 horas (`URGENCIA_ALERTA_HORAS`, opcional). O encaminhamento formal ao
-especialista da área continua acontecendo depois, normalmente.
+Quando o cliente relata algo **acontecendo agora** (prisão, flagrante, oficial na porta, mandado sendo
+cumprido, busca e apreensão em curso), a Ana **não avisa ninguém na hora**: ela abre uma triagem e
+pergunta, uma coisa de cada vez, só o que faltar:
+
+1. se o fato é de agora / das últimas 24 horas (na busca e apreensão: se o oficial ou a polícia está no local agora);
+2. em qual cidade ou delegacia (região de atuação);
+3. qual a relação de quem fala com a pessoa presa (ou com o bem);
+4. se quer contratar um advogado agora, sabendo que o atendimento é particular.
+
+O "ALERTA URGENTE" ao Dr. Willian e à Dra. Aline (WhatsApp e e-mail) **só sai** se o fato for atual,
+estiver na região de atuação e a pessoa confirmar que quer contratar agora. Continua valendo no máximo
+um aviso por conversa a cada 6 horas (`URGENCIA_ALERTA_HORAS`, opcional). O encaminhamento formal ao
+especialista da área acontece em seguida, normalmente.
+
+Caso antigo, fora da região, quem não quer contratar agora, quem parou de responder e busca e apreensão
+sem oficial no local **não geram aviso**: ficam como lead no painel `/admin` (etiqueta com o status da
+triagem) e entram no **resumo matinal das 8h** (horário de Brasília), enviado aos dois pelo mesmo canal.
+
+- **Região de atuação:** Maringá, Sarandi, Paiçandu, Mandaguaçu, Mandaguari, Marialva, Astorga, Nova
+  Esperança, Cianorte, Umuarama e Paranavaí, além de "região de Maringá" e "noroeste do Paraná". A lista
+  de municípios pode ser trocada com `URGENCIA_REGIAO` (opcional, separada por vírgula).
+- **Resumo matinal:** usa o agendador que já existe (não há cron nem serviço novo) e depende do Supabase.
+  Se o servidor estiver fora do ar às 8h, o resumo sai no primeiro ciclo depois disso. A hora pode ser
+  ajustada com `URGENCIA_DIGEST_HORA` (opcional, padrão 8).
 
 ### Recado de voz da Ana (ElevenLabs)
 
